@@ -1,0 +1,37 @@
+# Binaries
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+minipay
+
+# Test binary, coverage
+*.test
+*.out
+coverage.html
+coverage.txt
+
+# Environment
+.env
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Build
+/bin/
+.gocache/
+.gotmp/
+
+# Temporary make binary (not part of the project)
+/make.exe
+
+# Vendor (we use Go modules)
+/vendor/

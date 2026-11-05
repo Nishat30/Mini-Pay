@@ -1,0 +1,50 @@
+# openapi.yaml — MiniPay API specification.
+# Owns: the API contract; handlers must match this.
+# Must never: drift from what the code actually accepts and returns.
+# Validated in CI.
+openapi: "3.1.0"
+info:
+  title: MiniPay API
+  version: "0.1.0"
+  description: A payments backend demonstrating correctness, double-entry accounting, and reliable webhooks.
+
+servers:
+  - url: http://localhost:8080
+    description: Local development
+
+paths:
+  /healthz:
+    get:
+      summary: Liveness probe
+      operationId: healthz
+      responses:
+        "200":
+          description: Service is alive
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                    example: ok
+
+  /readyz:
+    get:
+      summary: Readiness probe
+      operationId: readyz
+      responses:
+        "200":
+          description: Service and dependencies are ready
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                  checks:
+                    type: object
+        "503":
+          description: One or more dependencies are not ready
+

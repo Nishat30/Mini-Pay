@@ -1,0 +1,57 @@
+# ci.yml — GitHub Actions CI pipeline for MiniPay.
+# Owns: lint, test, build verification on every pull request.
+# Must never: deploy or touch production.
+# Depends on: Go 1.25, golangci-lint.
+
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  lint:
+    name: Lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.25"
+      - name: golangci-lint
+        uses: golangci/golangci-lint-action@v6
+        with:
+          version: latest
+      - name: go vet
+        run: go vet ./...
+
+  test:
+    name: Unit Tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.25"
+      - name: Run unit tests
+        run: go test -race -shuffle=on -count=1 ./...
+
+  build:
+    name: Build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.25"
+      - name: Build binary
+        run: go build -o minipay ./cmd/minipay
+
+  # TODO(phase-1): add integration tests with Postgres/Redis services
+  # TODO(phase-3): add govulncheck, docker build, openapi validation
+
