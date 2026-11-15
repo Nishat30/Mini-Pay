@@ -4,7 +4,7 @@
 *.dll
 *.so
 *.dylib
-minipay
+/minipay
 
 # Test binary, coverage
 *.test
