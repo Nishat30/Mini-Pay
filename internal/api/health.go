@@ -18,7 +18,7 @@ func handleHealthz() http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
-		json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
+		_ = json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
 	}
 }
 
@@ -54,7 +54,7 @@ func handleReadyz(db *pgxpool.Pool, rdb *redis.Client) http.HandlerFunc {
 		} else {
 			w.WriteHeader(http.StatusOK)
 		}
-		json.NewEncoder(w).Encode(map[string]any{
+		_ = json.NewEncoder(w).Encode(map[string]any{
 			"status": map[bool]string{true: "ok", false: "degraded"}[healthy],
 			"checks": checks,
 		})
