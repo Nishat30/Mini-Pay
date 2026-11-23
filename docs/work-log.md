@@ -4,55 +4,40 @@ Newest entries first. Each entry: what was done, why, how verified, what's left.
 
 ---
 
-## 2026-11-23: Phase 1 — Foundation
+## 2026-11-23: Phase 2 — Webhooks
 
 ### What
-- Designed and applied migration `000002_core_schema.up.sql` covering 11 core tables (`merchants`, `payments`, `payment_events`, `refunds`, `idempotency_keys`, `ledger_accounts`, `ledger_transactions`, `ledger_entries`, `outbox_events`, `webhook_deliveries`, `risk_decisions`).
-- Created PostgreSQL deferred constraint trigger `assert_ledger_balanced` and append-only trigger `forbid_mutation` protecting ledger entries, transactions, and payment events.
-- Generated typed database access code using sqlc in Docker (`internal/platform/db`).
-- Implemented prefixed ULID generation (`internal/platform/ids.go`) and transaction runner `WithTx`.
-- Implemented pure payment lifecycle state machine with validation (`internal/payments/state.go`).
-- Implemented double-entry ledger domain service and financial invariant checker (`internal/ledger/ledger.go`).
-- Implemented single-transaction idempotency key locking and response caching (`internal/idempotency/store.go`).
-- Implemented PSP simulator supporting deterministic outcomes (`internal/processor/simulator.go`).
-- Implemented background outbox worker (`internal/outbox/worker.go`) with `FOR UPDATE SKIP LOCKED` batching.
-- Implemented HTTP API handlers for `POST /v1/payments`, `GET /v1/payments/{id}`, and `GET /v1/payments` with Bearer auth and payload validation.
-- Implemented admin CLI subcommands: `minipay admin create-merchant` and `minipay admin check-ledger`.
-- Wrote ADR 0002 on Single-Transaction Idempotency.
-- Created end-to-end integration tests in `test/phase1_integration_test.go`.
+- Implemented comprehensive SSRF defense in `internal/webhooks/ssrf.go` with 15+ prohibited CIDR blocks (RFC 1918, loopback, CGNAT, link-local, AWS/cloud metadata `169.254.169.254`, IPv6 ULA) and socket control callbacks preventing DNS rebinding.
+- Implemented HMAC-SHA256 signature generator and verification in `internal/webhooks/signer.go` with `MiniPay-Signature: t=<timestamp>,v1=<signature>` and 5-minute replay tolerance window.
+- Created `db/queries/webhooks.sql` and generated typed queries via sqlc for `webhook_deliveries` (`CreateWebhookDelivery`, `ClaimPendingDeliveries`, `UpdateDeliverySuccess`, `UpdateDeliveryFailure`, `GetWebhookDelivery`).
+- Implemented asynchronous webhook dispatcher in `internal/webhooks/dispatcher.go` with exponential retry backoff ($10 \times 2^{\text{attempts}-1}$ seconds) and dead-letter archiving after 5 failed attempts.
+- Implemented merchant webhook management endpoints `PUT /v1/merchants/webhook` and `GET /v1/merchants/webhook` in `internal/api/merchants.go` protected by SSRF validation.
+- Wired both payment outbox worker and webhook dispatcher into `cmd/minipay/worker.go` with coordinated graceful shutdown.
+- Wrote ADR 0003 documenting Webhook Reliability, HMAC Signatures, and SSRF Prevention.
+- Created unit tests and end-to-end integration tests in `internal/webhooks/` and `test/phase2_integration_test.go`.
 
 ### Why
-Phase 1 delivers the core transactional engine of MiniPay: guaranteeing that payments cannot be duplicated under retries, double-entry ledger debits and credits strictly balance, and mutations are atomic across the payment, outbox, and ledger tables.
+Phase 2 ensures merchants receive guaranteed, tamper-proof, asynchronous notifications when payments succeed or fail, while protecting MiniPay's internal infrastructure from SSRF exploitation.
 
 ### Verification
-- **Migration**: `go run ./cmd/minipay migrate up` successfully applied migration 2 (`applied: 2`).
 - **Unit Tests**:
-  - `internal/payments`: Table-driven tests verifying all valid and invalid transitions and terminal states.
-  - `internal/ledger`: Tests verifying fee formulas ($10.00 -> $0.59), balanced capture entries, and refund entries.
-  - `internal/idempotency`: Tests verifying SHA-256 request hashing and key validation.
-  - `internal/platform`: Tests verifying prefixed ULIDs and config safety.
-- **Admin CLI**:
-  - `go run ./cmd/minipay admin create-merchant --name "Acme Corp"` created merchant with ID `mer_...` and API key `mp_test_...`.
-  - `go run ./cmd/minipay admin check-ledger` executed query checks and reported `Ledger integrity check: OK (all invariants hold, 0 violations)`.
-- **Integration Tests** (`test/phase1_integration_test.go`):
-  - `TestIdempotentReplay`: Initial request returned 201 Created; duplicate request returned 201 Created with `Idempotent-Replayed: true` and identical body.
-  - `TestIdempotencyKeyReuseDifferentPayload`: Attempting to reuse an idempotency key with an altered payload rejected with 422 Unprocessable Entity.
-  - `TestDuplicateStorm`: 10 concurrent requests with identical keys produced exactly 1 payment record in the database.
-  - `TestParallelDistinctKeys`: 10 concurrent requests with distinct keys created 10 distinct payment records.
-  - `TestLedgerTriggers`:
-    - Direct insert of unbalanced entry rejected by `assert_ledger_balanced` trigger (`ERROR: ledger transaction ... is unbalanced`).
-    - Direct update and delete rejected by `forbid_mutation` trigger (`ERROR: table ... rows are append-only and cannot be updated or deleted`).
-  - `TestWorkerEndToEnd`: Payment created in `processing`, outbox worker transitioned it to `succeeded`, populated `processor_ref`, created balanced ledger transaction `capture:<id>`, and invariant checker verified 0 violations.
+  - `TestIsPrivateIP`: Verified accurate classification of private, loopback, metadata, and public IPs across IPv4 and IPv6.
+  - `TestValidateURL`: Verified strict HTTPS enforcement, user credential stripping, and direct IP validation.
+  - `TestSignAndVerifyPayload`: Verified HMAC-SHA256 signature calculation, tampering detection, wrong secret rejection, and replay tolerance expiry.
+- **Integration Tests** (`test/phase2_integration_test.go`):
+  - `TestWebhookDeliverySuccess`: End-to-end test where a payment was created, processed by the payment worker, claimed by the webhook dispatcher, delivered to an HTTP receiver with valid HMAC signature and delivery ID headers, and marked succeeded in `webhook_deliveries`.
+  - `TestWebhookRetryOnFailure`: Verified that 500 status from the receiver keeps delivery in `pending`, records status 500, and schedules next attempt with exponential backoff.
+  - `TestWebhookDeadLetterAfterMaxAttempts`: Verified that after reaching max attempts, delivery state transitions to `dead` and outbox event is archived.
+  - `TestMerchantWebhookSSRFRejection`: Verified that attempts to configure internal IP targets (`169.254.169.254`, `127.0.0.1`, `192.168.1.10`, insecure HTTP) are rejected with `400 Bad Request`.
 
 ### Issues Resolved
-- Wazero JIT/memory crash under Go 1.25 on Windows: solved by invoking sqlc code generation through Docker container (`sqlc/sqlc:latest`).
-- Missing metadata constraint in test: populated default empty JSON object.
-- Worker event filtering: constrained outbox claim query to `type = 'payment.process'` so payments worker does not consume webhook events.
+- Filtered outbox query to `ClaimOutboxEventsForWebhooks` for events where `type != 'payment.process'`, preventing race conditions with payment processing.
+- Configured dev security policy (`AllowPrivate`, `AllowInsecure`) for local integration test servers while keeping strict HTTPS and public IP enforcement default for production.
 
 ### What's Left
-- Phase 2: Webhooks (dispatcher, retry schedule, exponential backoff, HMAC-SHA256 signature, SSRF protection).
+- Phase 3: Refunds and Stripe Adapter (partial/full refunds, reverse ledger entries, processor interface with Stripe testmode API).
 
 ---
 
-## 2026-11-03: Phase 0 — Bootstrap
-(Phase 0 entries preserved below)
+## 2026-11-23: Phase 1 — Foundation
+(Phase 1 entries preserved below)

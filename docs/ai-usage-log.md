@@ -4,47 +4,29 @@ This log records every non-trivial piece of AI-generated content, how it was ver
 
 ---
 
-## 2026-11-23: Phase 1 — Foundation
+## 2026-11-23: Phase 2 — Webhooks
 
 ### Generated
-- Database migrations: `000002_core_schema.up.sql` and `down.sql` with deferred constraint trigger `assert_ledger_balanced` and immutability trigger `forbid_mutation`.
-- sqlc queries for merchants, payments, idempotency, ledger, and outbox.
-- Idempotency layer: single-transaction request hashing, locking, and replay mechanism.
-- State machine: pure transition function and validation.
-- Double-entry ledger: fee calculations, capture/refund entry generators, and invariant checking.
-- PSP simulator and outbox worker.
-- HTTP API handlers: POST /v1/payments, GET /v1/payments/{id}, GET /v1/payments.
-- Admin commands: create-merchant, check-ledger.
-- ADR 0002 on Single-Transaction Idempotency.
-- End-to-end integration tests in `test/phase1_integration_test.go`.
+- SSRF protection layer: CIDR classification and custom HTTP transport dialer with socket control in `internal/webhooks/ssrf.go`.
+- HMAC-SHA256 signature scheme in `internal/webhooks/signer.go`.
+- SQL queries and sqlc generated code for `webhook_deliveries` in `db/queries/webhooks.sql` and `internal/platform/db/webhooks.sql.go`.
+- Webhook dispatcher with exponential backoff and dead-lettering in `internal/webhooks/dispatcher.go`.
+- Merchant webhook configuration endpoints (`PUT /v1/merchants/webhook`, `GET /v1/merchants/webhook`) in `internal/api/merchants.go`.
+- ADR 0003: Webhook Reliability, HMAC Signatures, and SSRF Prevention.
+- Integration tests in `test/phase2_integration_test.go`.
 
 ### Verification
-- **PostgreSQL Triggers**: Verified with live tests in `TestLedgerTriggers` that an unbalanced debit/credit insert triggers a database constraint exception (`P0001`), and mutating append-only tables fails with `forbid_mutation`.
-- **Idempotency & Replay**: Verified with `TestIdempotentReplay` (response headers and body match byte-for-byte), `TestIdempotencyKeyReuseDifferentPayload` (422 response), and `TestDuplicateStorm` (10 concurrent requests yield exactly 1 payment record).
-- **Ledger Invariants**: Verified with `TestWorkerEndToEnd` and `minipay admin check-ledger` that all debits equal credits, currencies match, and zero violations occur.
-- **Unit Tests**: Full suite passed with `-v` across all domain packages.
+- **SSRF Defense**: Verified via unit tests (`TestIsPrivateIP`, `TestValidateURL`) and integration test `TestMerchantWebhookSSRFRejection` against AWS metadata `169.254.169.254`, loopback, and private CIDRs.
+- **HMAC Signatures**: Verified with `TestSignAndVerifyPayload` that tampered payloads and expired timestamps are rejected.
+- **End-to-End Delivery**: Verified with `TestWebhookDeliverySuccess` that delivered events match HMAC signatures, headers are populated, and delivery status updates to 200.
+- **Retry & Dead-Letter**: Verified with `TestWebhookRetryOnFailure` and `TestWebhookDeadLetterAfterMaxAttempts` that backoff is scheduled and deliveries transition to `dead` upon exhaustion.
 
 ### Changes After Review
-- Added `type = $2` filtering to `ClaimOutboxEvents` in `db/queries/outbox.sql` so payment workers only claim `payment.process` events and don't mistakenly consume webhook notification events.
-- Fixed `GetAccount` query in `db/queries/ledger.sql` to properly handle nullable `merchant_id` for system-level accounts (`processor_clearing` and `platform_fees`).
-- Adjusted `CreatePaymentParams` in integration test to ensure non-null `metadata` JSON default (`{}`).
-- Fixed PostgreSQL connection credentials in integration test setup from `minipay_dev_pass` to the development standard `minipay`.
+- Added socket-level IP check inside `net.Dialer.Control` callback to guard against DNS rebinding attacks that could bypass hostname validation.
+- Made `SecurityPolicy` configurable via environment variables (`WEBHOOK_ALLOW_PRIVATE`, `WEBHOOK_ALLOW_INSECURE`) so local development and integration tests can communicate with localhost servers while production remains strictly secure.
+- Added `X-Delivery-Id` header to every dispatched webhook to provide merchants with end-to-end trace correlation with MiniPay support logs.
 
 ---
 
-## 2026-11-03: Phase 0 Scaffold
-
-### Generated
-- Project structure and all bootstrap files (config, logging, router, health checks, middleware, migrations, Makefile, CI, ADR, docs).
-
-### Verification
-- **Config**: Unit tests verify sk_live_ rejection, default values, and DSN redaction.
-- **Health endpoints**: Manual curl test against running server.
-- **Makefile**: Verified each target runs without error.
-- **CI YAML**: Validated syntax matches GitHub Actions schema.
-- **ADR**: Reviewed against current Go, pgx, sqlc, and Redis documentation.
-
-### Changes After Review
-- Anchored root binary ignore pattern in `.gitignore` (`/minipay`) after discovering that bare `minipay` caused Git to ignore `cmd/minipay/`.
-- Adjusted `.github/workflows/ci.yml` to compile `golangci-lint` with the runner's Go compiler and run `go mod download` prior to `go build` to ensure clean builds in CI.
-- Handled unhandled errors in `internal/api/health.go` (`_ = json.NewEncoder...`) to satisfy `errcheck`.
+## 2026-11-23: Phase 1 — Foundation
+(Phase 1 entries preserved below)
