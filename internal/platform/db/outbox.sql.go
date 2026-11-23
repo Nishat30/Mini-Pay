@@ -58,6 +58,48 @@ func (q *Queries) ClaimOutboxEvents(ctx context.Context, arg ClaimOutboxEventsPa
 	return items, nil
 }
 
+const claimOutboxEventsForWebhooks = `-- name: ClaimOutboxEventsForWebhooks :many
+UPDATE outbox_events
+SET available_at = now() + interval '60 seconds', attempts = attempts + 1
+WHERE id IN (
+  SELECT sub.id FROM outbox_events sub
+  WHERE sub.processed_at IS NULL AND sub.available_at <= now() AND sub.type != 'payment.process'
+  ORDER BY sub.id LIMIT $1
+  FOR UPDATE SKIP LOCKED
+)
+RETURNING id, merchant_id, aggregate_id, type, payload, created_at, processed_at, attempts, available_at
+`
+
+func (q *Queries) ClaimOutboxEventsForWebhooks(ctx context.Context, limit int32) ([]OutboxEvents, error) {
+	rows, err := q.db.Query(ctx, claimOutboxEventsForWebhooks, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []OutboxEvents
+	for rows.Next() {
+		var i OutboxEvents
+		if err := rows.Scan(
+			&i.ID,
+			&i.MerchantID,
+			&i.AggregateID,
+			&i.Type,
+			&i.Payload,
+			&i.CreatedAt,
+			&i.ProcessedAt,
+			&i.Attempts,
+			&i.AvailableAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const createOutboxEvent = `-- name: CreateOutboxEvent :one
 INSERT INTO outbox_events (merchant_id, aggregate_id, type, payload, created_at, available_at)
 VALUES ($1, $2, $3, $4, now(), now())
@@ -78,6 +120,28 @@ func (q *Queries) CreateOutboxEvent(ctx context.Context, arg CreateOutboxEventPa
 		arg.Type,
 		arg.Payload,
 	)
+	var i OutboxEvents
+	err := row.Scan(
+		&i.ID,
+		&i.MerchantID,
+		&i.AggregateID,
+		&i.Type,
+		&i.Payload,
+		&i.CreatedAt,
+		&i.ProcessedAt,
+		&i.Attempts,
+		&i.AvailableAt,
+	)
+	return i, err
+}
+
+const getOutboxEventByID = `-- name: GetOutboxEventByID :one
+SELECT id, merchant_id, aggregate_id, type, payload, created_at, processed_at, attempts, available_at FROM outbox_events
+WHERE id = $1
+`
+
+func (q *Queries) GetOutboxEventByID(ctx context.Context, id int64) (OutboxEvents, error) {
+	row := q.db.QueryRow(ctx, getOutboxEventByID, id)
 	var i OutboxEvents
 	err := row.Scan(
 		&i.ID,

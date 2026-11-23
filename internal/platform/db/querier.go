@@ -12,25 +12,33 @@ type Querier interface {
 	CheckCurrencyMismatchEntries(ctx context.Context) ([]CheckCurrencyMismatchEntriesRow, error)
 	CheckUnbalancedTransactions(ctx context.Context) ([]CheckUnbalancedTransactionsRow, error)
 	ClaimOutboxEvents(ctx context.Context, arg ClaimOutboxEventsParams) ([]OutboxEvents, error)
+	ClaimOutboxEventsForWebhooks(ctx context.Context, limit int32) ([]OutboxEvents, error)
+	ClaimPendingDeliveries(ctx context.Context, limit int32) ([]WebhookDeliveries, error)
 	CreateAccountLazy(ctx context.Context, arg CreateAccountLazyParams) (LedgerAccounts, error)
 	CreateLedgerEntry(ctx context.Context, arg CreateLedgerEntryParams) (LedgerEntries, error)
 	CreateLedgerTransaction(ctx context.Context, arg CreateLedgerTransactionParams) (LedgerTransactions, error)
 	CreateMerchant(ctx context.Context, arg CreateMerchantParams) (Merchants, error)
 	CreateOutboxEvent(ctx context.Context, arg CreateOutboxEventParams) (OutboxEvents, error)
 	CreatePayment(ctx context.Context, arg CreatePaymentParams) (Payments, error)
+	CreateWebhookDelivery(ctx context.Context, arg CreateWebhookDeliveryParams) (WebhookDeliveries, error)
 	GetAccount(ctx context.Context, arg GetAccountParams) (LedgerAccounts, error)
 	GetAccountBalance(ctx context.Context, accountID string) (int64, error)
 	GetIdempotencyKey(ctx context.Context, arg GetIdempotencyKeyParams) (IdempotencyKeys, error)
 	GetLedgerTransactionByRef(ctx context.Context, reference string) (LedgerTransactions, error)
 	GetMerchantByAPIKeyHash(ctx context.Context, apiKeyHash []byte) (Merchants, error)
 	GetMerchantByID(ctx context.Context, id string) (Merchants, error)
+	GetOutboxEventByID(ctx context.Context, id int64) (OutboxEvents, error)
 	GetPaymentByID(ctx context.Context, arg GetPaymentByIDParams) (Payments, error)
 	GetPaymentByIDForUpdate(ctx context.Context, arg GetPaymentByIDForUpdateParams) (Payments, error)
+	GetWebhookDelivery(ctx context.Context, id string) (WebhookDeliveries, error)
+	GetWebhookDeliveryByEvent(ctx context.Context, arg GetWebhookDeliveryByEventParams) (WebhookDeliveries, error)
 	InsertIdempotencyKey(ctx context.Context, arg InsertIdempotencyKeyParams) (IdempotencyKeys, error)
 	InsertPaymentEvent(ctx context.Context, arg InsertPaymentEventParams) (PaymentEvents, error)
 	ListPayments(ctx context.Context, arg ListPaymentsParams) ([]Payments, error)
 	MarkOutboxProcessed(ctx context.Context, id int64) error
 	ScheduleOutboxRetry(ctx context.Context, arg ScheduleOutboxRetryParams) error
+	UpdateDeliveryFailure(ctx context.Context, arg UpdateDeliveryFailureParams) error
+	UpdateDeliverySuccess(ctx context.Context, arg UpdateDeliverySuccessParams) error
 	UpdateIdempotencyKeyCompleted(ctx context.Context, arg UpdateIdempotencyKeyCompletedParams) error
 	UpdateMerchantWebhook(ctx context.Context, arg UpdateMerchantWebhookParams) (Merchants, error)
 	UpdatePaymentStatus(ctx context.Context, arg UpdatePaymentStatusParams) (Payments, error)
