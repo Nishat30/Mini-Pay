@@ -17,5 +17,7 @@ This log records every non-trivial piece of AI-generated content, how it was ver
 - **ADR**: Reviewed against current Go, pgx, sqlc, and Redis documentation.
 
 ### Changes After Review
-- (To be filled in after human review.)
+- Anchored root binary ignore pattern in `.gitignore` (`/minipay`) after discovering that bare `minipay` caused Git to ignore `cmd/minipay/`.
+- Adjusted `.github/workflows/ci.yml` to compile `golangci-lint` with the runner's Go compiler and run `go mod download` prior to `go build` to ensure clean builds in CI.
+- Handled unhandled errors in `internal/api/health.go` (`_ = json.NewEncoder...`) to satisfy `errcheck`.
 
