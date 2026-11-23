@@ -14,6 +14,21 @@ WHERE id IN (
 )
 RETURNING *;
 
+-- name: ClaimOutboxEventsForWebhooks :many
+UPDATE outbox_events
+SET available_at = now() + interval '60 seconds', attempts = attempts + 1
+WHERE id IN (
+  SELECT sub.id FROM outbox_events sub
+  WHERE sub.processed_at IS NULL AND sub.available_at <= now() AND sub.type != 'payment.process'
+  ORDER BY sub.id LIMIT $1
+  FOR UPDATE SKIP LOCKED
+)
+RETURNING *;
+
+-- name: GetOutboxEventByID :one
+SELECT * FROM outbox_events
+WHERE id = $1;
+
 -- name: MarkOutboxProcessed :exec
 UPDATE outbox_events
 SET processed_at = now()

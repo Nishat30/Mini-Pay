@@ -19,7 +19,7 @@ Updated in the same commit that adds, moves, or removes a file.
 |------|---------|---------------|
 | `main.go` | Entry point, subcommand routing (api, worker, migrate, admin) | Binary build |
 | `api.go` | Wires up and starts the HTTP API server with graceful shutdown | `main.go` |
-| `worker.go` | Wires up and starts the background outbox worker process | `main.go` |
+| `worker.go` | Wires up and starts the background payment worker and webhook dispatcher | `main.go` |
 | `migrate.go` | Runs database migrations via golang-migrate | `main.go` |
 | `admin.go` | Routes admin CLI subcommands (`create-merchant`, `check-ledger`) | `main.go` |
 
@@ -34,7 +34,7 @@ Updated in the same commit that adds, moves, or removes a file.
 | `database.go` | PostgreSQL connection pool via pgx/v5 | api, worker, admin |
 | `redis.go` | Redis client creation and health check | api (rate limiting) |
 | `migrate.go` | Migration runner using golang-migrate | cmd/minipay/migrate.go |
-| `ids.go` | Prefixed ULID generator (`mer_`, `pay_`, `ref_`, `acc_`, `ltx_`, etc.) | Domain packages |
+| `ids.go` | Prefixed ULID generator (`mer_`, `pay_`, `ref_`, `acc_`, `ltx_`, `whd_`, `evt_`) | Domain packages |
 | `ids_test.go` | Unit tests for prefixed ULID generation and format validation | CI |
 | `clock.go` | Clock interface with RealClock and FakeClock for test determinism | Worker, services |
 | `tx.go` | WithTx transaction runner with automatic commit/rollback | API, worker, ledger |
@@ -73,6 +73,16 @@ Updated in the same commit that adds, moves, or removes a file.
 |------|---------|---------------|
 | `worker.go` | Transactional outbox polling, processor invocation, ledger posting | cmd/minipay/worker.go |
 
+## internal/webhooks/
+
+| Path | Purpose | Depended On By |
+|------|---------|---------------|
+| `ssrf.go` | SSRF defense, blocked CIDRs, and safe HTTP dialer with socket controls | Dispatcher, API |
+| `ssrf_test.go` | Unit tests for private IP detection and static URL validation | CI |
+| `signer.go` | HMAC-SHA256 signature generator and timestamp replay verification | Dispatcher, tests |
+| `signer_test.go` | Unit tests for payload signing, tampering detection, and replay expiry | CI |
+| `dispatcher.go` | Webhook event poller, delivery sender, exponential backoff, dead-lettering | cmd/minipay/worker.go |
+
 ## internal/api/
 
 | Path | Purpose | Depended On By |
@@ -83,6 +93,7 @@ Updated in the same commit that adds, moves, or removes a file.
 | `middleware.go` | Panic recovery, request ID generation | router.go |
 | `auth.go` | Bearer token authentication middleware and context extraction | router.go |
 | `payments.go` | POST /v1/payments, GET /v1/payments/{id}, GET /v1/payments | router.go |
+| `merchants.go` | PUT /v1/merchants/webhook, GET /v1/merchants/webhook | router.go |
 
 ## db/migrations/
 
@@ -102,6 +113,7 @@ Updated in the same commit that adds, moves, or removes a file.
 | `payments.sql` | Payment creation, lookup, status update, event logging | sqlc |
 | `ledger.sql` | Account lazy creation, transaction, entry, invariant queries | sqlc |
 | `outbox.sql` | Outbox event creation, claim with skip locked, retry, mark processed | sqlc |
+| `webhooks.sql` | Webhook delivery creation, claim pending, success, failure update | sqlc |
 
 ## deploy/
 
@@ -113,7 +125,7 @@ Updated in the same commit that adds, moves, or removes a file.
 
 | Path | Purpose | Depended On By |
 |------|---------|---------------|
-| `openapi.yaml` | API specification (OpenAPI 3.1) including payments endpoints | CI validation, documentation |
+| `openapi.yaml` | API specification (OpenAPI 3.1) including payments and webhook config | CI validation, documentation |
 
 ## docs/
 
@@ -125,9 +137,11 @@ Updated in the same commit that adds, moves, or removes a file.
 | `ai-usage-log.md` | Log of AI-generated content and how it was verified | Interviews |
 | `adr/0001-stack-and-why.md` | Technology stack selection rationale | Architecture decisions |
 | `adr/0002-single-transaction-idempotency.md` | Single-transaction idempotency and response caching | Architecture decisions |
+| `adr/0003-webhook-reliability.md` | Webhook reliability, HMAC signatures, and SSRF prevention | Architecture decisions |
 
 ## test/
 
 | Path | Purpose | Depended On By |
 |------|---------|---------------|
-| `phase1_integration_test.go` | Integration tests: idempotent replay, duplicate storm, ledger triggers, worker | CI |
+| `phase1_integration_test.go` | Phase 1 integration tests: idempotent replay, storm, ledger triggers, worker | CI |
+| `phase2_integration_test.go` | Phase 2 integration tests: delivery success, retry backoff, dead letter, SSRF | CI |

@@ -15,19 +15,26 @@ import (
 	"github.com/redis/go-redis/v9"
 
 	"github.com/minipay/minipay/internal/platform/db"
+	"github.com/minipay/minipay/internal/webhooks"
 )
 
 // NewRouter creates the HTTP handler with all routes and middleware.
-func NewRouter(logger *slog.Logger, pool *pgxpool.Pool, rdb *redis.Client) http.Handler {
+func NewRouter(logger *slog.Logger, pool *pgxpool.Pool, rdb *redis.Client, policies ...webhooks.SecurityPolicy) http.Handler {
 	mux := http.NewServeMux()
+
+	var policy webhooks.SecurityPolicy
+	if len(policies) > 0 {
+		policy = policies[0]
+	}
 
 	// Health checks — no auth required.
 	mux.HandleFunc("GET /healthz", handleHealthz())
 	mux.HandleFunc("GET /readyz", handleReadyz(pool, rdb))
 
-	// Database queries and payments handler
+	// Database queries and handlers
 	queries := db.New(pool)
 	paymentsHandler := NewPaymentsHandler(pool, queries)
+	merchantsHandler := NewMerchantsHandler(queries, policy)
 
 	// Authenticated routes
 	authMiddleware := Authenticate(queries)
@@ -35,6 +42,10 @@ func NewRouter(logger *slog.Logger, pool *pgxpool.Pool, rdb *redis.Client) http.
 	mux.Handle("POST /v1/payments", authMiddleware(http.HandlerFunc(paymentsHandler.CreatePayment)))
 	mux.Handle("GET /v1/payments/{id}", authMiddleware(http.HandlerFunc(paymentsHandler.GetPayment)))
 	mux.Handle("GET /v1/payments", authMiddleware(http.HandlerFunc(paymentsHandler.ListPayments)))
+
+	// Webhook configuration routes
+	mux.Handle("PUT /v1/merchants/webhook", authMiddleware(http.HandlerFunc(merchantsHandler.UpdateWebhook)))
+	mux.Handle("GET /v1/merchants/webhook", authMiddleware(http.HandlerFunc(merchantsHandler.GetWebhook)))
 
 	// Wrap with global middleware (outermost first).
 	var handler http.Handler = mux

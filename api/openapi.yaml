@@ -233,3 +233,60 @@ paths:
                 $ref: '#/components/schemas/Payment'
         "404":
           description: Payment not found
+
+  /v1/merchants/webhook:
+    get:
+      summary: Retrieve current webhook configuration
+      operationId: getMerchantWebhook
+      security:
+        - BearerAuth: []
+      responses:
+        "200":
+          description: Current webhook configuration
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  merchant_id:
+                    type: string
+                  webhook_url:
+                    type: string
+                    nullable: true
+                  webhook_secret:
+                    type: string
+
+    put:
+      summary: Update webhook endpoint URL
+      operationId: updateMerchantWebhook
+      security:
+        - BearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - url
+              properties:
+                url:
+                  type: string
+                  description: HTTPS endpoint for webhook delivery
+      responses:
+        "200":
+          description: Webhook configuration updated
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  merchant_id:
+                    type: string
+                  webhook_url:
+                    type: string
+                    nullable: true
+                  webhook_secret:
+                    type: string
+        "400":
+          description: Invalid webhook URL or SSRF rejection

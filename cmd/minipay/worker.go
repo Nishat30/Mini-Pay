@@ -10,6 +10,7 @@ import (
 	"log/slog"
 	"os"
 	"os/signal"
+	"sync"
 	"syscall"
 
 	"github.com/minipay/minipay/internal/ledger"
@@ -17,6 +18,7 @@ import (
 	"github.com/minipay/minipay/internal/platform"
 	"github.com/minipay/minipay/internal/platform/db"
 	"github.com/minipay/minipay/internal/processor"
+	"github.com/minipay/minipay/internal/webhooks"
 )
 
 func runWorker(cfg *platform.Config, logger *slog.Logger) error {
@@ -35,13 +37,51 @@ func runWorker(cfg *platform.Config, logger *slog.Logger) error {
 	psp := processor.NewSimulator()
 	clock := platform.RealClock{}
 
-	w := outbox.NewWorker(pool, queries, ledgerService, psp, clock, logger)
+	// 1. Payment Outbox Worker
+	paymentWorker := outbox.NewWorker(pool, queries, ledgerService, psp, clock, logger)
 
-	logger.Info("worker started, listening for outbox events")
-	if err := w.Run(ctx); err != nil && err != context.Canceled {
-		return fmt.Errorf("worker run error: %w", err)
+	// 2. Webhook Dispatcher
+	webhookDispatcher := webhooks.NewDispatcher(pool, queries, clock, logger, webhooks.Config{
+		Policy: webhooks.SecurityPolicy{
+			AllowPrivate:  cfg.AllowPrivateWebhooks,
+			AllowInsecure: cfg.AllowInsecureWebhooks,
+		},
+		PollInterval: cfg.OutboxPollInterval,
+	})
+
+	var wg sync.WaitGroup
+	errCh := make(chan error, 2)
+
+	// Start payment worker
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		logger.Info("payment outbox worker started")
+		if err := paymentWorker.Run(ctx); err != nil && err != context.Canceled {
+			errCh <- fmt.Errorf("payment worker error: %w", err)
+		}
+	}()
+
+	// Start webhook dispatcher
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		logger.Info("webhook dispatcher started")
+		if err := webhookDispatcher.Run(ctx); err != nil && err != context.Canceled {
+			errCh <- fmt.Errorf("webhook dispatcher error: %w", err)
+		}
+	}()
+
+	// Wait for context cancellation or fatal worker error
+	select {
+	case <-ctx.Done():
+		logger.Info("shutdown signal received, stopping workers")
+	case err := <-errCh:
+		cancel()
+		return err
 	}
 
-	logger.Info("worker stopped cleanly")
+	wg.Wait()
+	logger.Info("all workers stopped cleanly")
 	return nil
 }
