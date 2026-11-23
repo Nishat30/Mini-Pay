@@ -301,6 +301,56 @@ func (s *Service) PostCapture(ctx context.Context, txQueries *db.Queries, paymen
 	return nil
 }
 
+// PostRefund creates a refund ledger transaction and inserts balanced ledger entries:
+// - Debit: Merchant Payable (refund amount)
+// - Credit: Processor Clearing (refund amount)
+// It is strictly idempotent via reference: "refund:<refund_id>".
+func (s *Service) PostRefund(ctx context.Context, txQueries *db.Queries, refundID, paymentID, merchantID, currency string, amount int64) error {
+	ref := fmt.Sprintf("refund:%s", refundID)
+
+	// Check if already posted
+	_, err := txQueries.GetLedgerTransactionByRef(ctx, ref)
+	if err == nil {
+		return nil
+	}
+
+	accounts, err := s.EnsureAccounts(ctx, merchantID, currency)
+	if err != nil {
+		return err
+	}
+
+	entries, err := RefundEntries(accounts, currency, amount)
+	if err != nil {
+		return err
+	}
+
+	txID := platform.NewID(platform.PrefixLedgerTransaction)
+	txRow, err := txQueries.CreateLedgerTransaction(ctx, db.CreateLedgerTransactionParams{
+		ID:        txID,
+		PaymentID: paymentID,
+		Kind:      "refund",
+		Reference: ref,
+	})
+	if err != nil {
+		return fmt.Errorf("failed to create ledger refund transaction: %w", err)
+	}
+
+	for _, entry := range entries {
+		_, err = txQueries.CreateLedgerEntry(ctx, db.CreateLedgerEntryParams{
+			TransactionID: txRow.ID,
+			AccountID:     entry.AccountID,
+			Direction:     entry.Direction,
+			Amount:        entry.Amount,
+			Currency:      entry.Currency,
+		})
+		if err != nil {
+			return fmt.Errorf("failed to insert ledger refund entry: %w", err)
+		}
+	}
+
+	return nil
+}
+
 // InvariantViolation describes an integrity check failure in the ledger.
 type InvariantViolation struct {
 	Check       string

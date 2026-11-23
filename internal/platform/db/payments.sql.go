@@ -60,6 +60,30 @@ func (q *Queries) CreatePayment(ctx context.Context, arg CreatePaymentParams) (P
 	return i, err
 }
 
+const createRefund = `-- name: CreateRefund :one
+INSERT INTO refunds (id, payment_id, amount, created_at)
+VALUES ($1, $2, $3, now())
+RETURNING id, payment_id, amount, created_at
+`
+
+type CreateRefundParams struct {
+	ID        string `json:"id"`
+	PaymentID string `json:"payment_id"`
+	Amount    int64  `json:"amount"`
+}
+
+func (q *Queries) CreateRefund(ctx context.Context, arg CreateRefundParams) (Refunds, error) {
+	row := q.db.QueryRow(ctx, createRefund, arg.ID, arg.PaymentID, arg.Amount)
+	var i Refunds
+	err := row.Scan(
+		&i.ID,
+		&i.PaymentID,
+		&i.Amount,
+		&i.CreatedAt,
+	)
+	return i, err
+}
+
 const getPaymentByID = `-- name: GetPaymentByID :one
 SELECT id, merchant_id, amount, amount_refunded, currency, status, processor, processor_ref, failure_code, metadata, version, created_at, updated_at FROM payments
 WHERE id = $1 AND merchant_id = $2
@@ -119,6 +143,23 @@ func (q *Queries) GetPaymentByIDForUpdate(ctx context.Context, arg GetPaymentByI
 		&i.Version,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+	)
+	return i, err
+}
+
+const getRefundByID = `-- name: GetRefundByID :one
+SELECT id, payment_id, amount, created_at FROM refunds
+WHERE id = $1
+`
+
+func (q *Queries) GetRefundByID(ctx context.Context, id string) (Refunds, error) {
+	row := q.db.QueryRow(ctx, getRefundByID, id)
+	var i Refunds
+	err := row.Scan(
+		&i.ID,
+		&i.PaymentID,
+		&i.Amount,
+		&i.CreatedAt,
 	)
 	return i, err
 }
@@ -201,6 +242,74 @@ func (q *Queries) ListPayments(ctx context.Context, arg ListPaymentsParams) ([]P
 		return nil, err
 	}
 	return items, nil
+}
+
+const listRefundsForPayment = `-- name: ListRefundsForPayment :many
+SELECT id, payment_id, amount, created_at FROM refunds
+WHERE payment_id = $1
+ORDER BY created_at ASC
+`
+
+func (q *Queries) ListRefundsForPayment(ctx context.Context, paymentID string) ([]Refunds, error) {
+	rows, err := q.db.Query(ctx, listRefundsForPayment, paymentID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []Refunds
+	for rows.Next() {
+		var i Refunds
+		if err := rows.Scan(
+			&i.ID,
+			&i.PaymentID,
+			&i.Amount,
+			&i.CreatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const updatePaymentRefund = `-- name: UpdatePaymentRefund :one
+UPDATE payments
+SET amount_refunded = amount_refunded + $1,
+    status = CASE WHEN amount_refunded + $1 = amount THEN 'refunded' ELSE status END,
+    version = version + 1,
+    updated_at = now()
+WHERE id = $2 AND merchant_id = $3
+RETURNING id, merchant_id, amount, amount_refunded, currency, status, processor, processor_ref, failure_code, metadata, version, created_at, updated_at
+`
+
+type UpdatePaymentRefundParams struct {
+	RefundAmount int64  `json:"refund_amount"`
+	ID           string `json:"id"`
+	MerchantID   string `json:"merchant_id"`
+}
+
+func (q *Queries) UpdatePaymentRefund(ctx context.Context, arg UpdatePaymentRefundParams) (Payments, error) {
+	row := q.db.QueryRow(ctx, updatePaymentRefund, arg.RefundAmount, arg.ID, arg.MerchantID)
+	var i Payments
+	err := row.Scan(
+		&i.ID,
+		&i.MerchantID,
+		&i.Amount,
+		&i.AmountRefunded,
+		&i.Currency,
+		&i.Status,
+		&i.Processor,
+		&i.ProcessorRef,
+		&i.FailureCode,
+		&i.Metadata,
+		&i.Version,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
+	return i, err
 }
 
 const updatePaymentStatus = `-- name: UpdatePaymentStatus :one

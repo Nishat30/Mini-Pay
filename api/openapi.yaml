@@ -234,6 +234,86 @@ paths:
         "404":
           description: Payment not found
 
+  /v1/payments/{id}/refunds:
+    post:
+      summary: Create a refund for a payment
+      operationId: createRefund
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: Idempotency-Key
+          in: header
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - amount
+              properties:
+                amount:
+                  type: integer
+                  description: Refund amount in minor units
+                reason:
+                  type: string
+      responses:
+        "201":
+          description: Refund created
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  id:
+                    type: string
+                  payment_id:
+                    type: string
+                  amount:
+                    type: integer
+                  currency:
+                    type: string
+                  status:
+                    type: string
+                  created_at:
+                    type: string
+        "400":
+          description: Invalid amount, status, or balance exceeded
+        "404":
+          description: Payment not found
+
+    get:
+      summary: List refunds for a payment
+      operationId: listRefunds
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: List of refunds
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: array
+                    items:
+                      type: object
+
   /v1/merchants/webhook:
     get:
       summary: Retrieve current webhook configuration

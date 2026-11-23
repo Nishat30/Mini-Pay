@@ -42,6 +42,8 @@ func NewRouter(logger *slog.Logger, pool *pgxpool.Pool, rdb *redis.Client, polic
 	mux.Handle("POST /v1/payments", authMiddleware(http.HandlerFunc(paymentsHandler.CreatePayment)))
 	mux.Handle("GET /v1/payments/{id}", authMiddleware(http.HandlerFunc(paymentsHandler.GetPayment)))
 	mux.Handle("GET /v1/payments", authMiddleware(http.HandlerFunc(paymentsHandler.ListPayments)))
+	mux.Handle("POST /v1/payments/{id}/refunds", authMiddleware(http.HandlerFunc(paymentsHandler.CreateRefund)))
+	mux.Handle("GET /v1/payments/{id}/refunds", authMiddleware(http.HandlerFunc(paymentsHandler.ListRefunds)))
 
 	// Webhook configuration routes
 	mux.Handle("PUT /v1/merchants/webhook", authMiddleware(http.HandlerFunc(merchantsHandler.UpdateWebhook)))

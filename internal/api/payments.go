@@ -15,6 +15,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/minipay/minipay/internal/idempotency"
+	"github.com/minipay/minipay/internal/ledger"
 	"github.com/minipay/minipay/internal/platform"
 	"github.com/minipay/minipay/internal/platform/db"
 )
@@ -53,16 +54,34 @@ type PaymentResponse struct {
 
 // PaymentsHandler handles /v1/payments endpoints.
 type PaymentsHandler struct {
-	pool    *pgxpool.Pool
-	queries *db.Queries
+	pool          *pgxpool.Pool
+	queries       *db.Queries
+	ledgerService *ledger.Service
 }
 
 // NewPaymentsHandler creates a new PaymentsHandler.
 func NewPaymentsHandler(pool *pgxpool.Pool, queries *db.Queries) *PaymentsHandler {
 	return &PaymentsHandler{
-		pool:    pool,
-		queries: queries,
+		pool:          pool,
+		queries:       queries,
+		ledgerService: ledger.NewService(queries),
 	}
+}
+
+// RefundRequest represents the payload for POST /v1/payments/{id}/refunds.
+type RefundRequest struct {
+	Amount int64  `json:"amount"`
+	Reason string `json:"reason,omitempty"`
+}
+
+// RefundResponse represents a created refund resource.
+type RefundResponse struct {
+	ID        string `json:"id"`
+	PaymentID string `json:"payment_id"`
+	Amount    int64  `json:"amount"`
+	Currency  string `json:"currency"`
+	Status    string `json:"status"`
+	CreatedAt string `json:"created_at"`
 }
 
 // CreatePayment handles POST /v1/payments.
@@ -352,4 +371,260 @@ func formatPaymentResponse(p db.Payments) *PaymentResponse {
 		CreatedAt:      p.CreatedAt.Time.Format(time.RFC3339),
 		UpdatedAt:      p.UpdatedAt.Time.Format(time.RFC3339),
 	}
+}
+
+// CreateRefund handles POST /v1/payments/{id}/refunds.
+func (h *PaymentsHandler) CreateRefund(w http.ResponseWriter, r *http.Request) {
+	merchant, err := MerchantFromContext(r.Context())
+	if err != nil {
+		writeError(w, http.StatusUnauthorized, "unauthorized", "unauthenticated merchant")
+		return
+	}
+
+	paymentID := r.PathValue("id")
+	if paymentID == "" {
+		writeError(w, http.StatusBadRequest, "invalid_id", "payment id is required")
+		return
+	}
+
+	idempotencyKey := strings.TrimSpace(r.Header.Get("Idempotency-Key"))
+	if idempotencyKey == "" {
+		writeError(w, http.StatusBadRequest, "missing_idempotency_key", "Idempotency-Key header is required")
+		return
+	}
+	if err := idempotency.ValidateKey(idempotencyKey); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid_idempotency_key", err.Error())
+		return
+	}
+
+	r.Body = http.MaxBytesReader(w, r.Body, 1<<20)
+	bodyBytes, err := io.ReadAll(r.Body)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "request_body_too_large", "request body exceeds 1MB limit")
+		return
+	}
+
+	var req RefundRequest
+	dec := json.NewDecoder(strings.NewReader(string(bodyBytes)))
+	dec.DisallowUnknownFields()
+	if err := dec.Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid_request_body", fmt.Sprintf("malformed JSON body: %v", err))
+		return
+	}
+
+	if req.Amount <= 0 {
+		writeError(w, http.StatusBadRequest, "invalid_amount", "refund amount must be greater than 0")
+		return
+	}
+
+	reqHash := idempotency.ComputeHash("POST", "/v1/payments/"+paymentID+"/refunds", bodyBytes)
+
+	var (
+		refundResp *RefundResponse
+		replayed   bool
+		userErr    error
+		userCode   string
+		userStatus int
+	)
+
+	err = platform.WithTx(r.Context(), h.pool, func(tx pgx.Tx) error {
+		txQueries := h.queries.WithTx(tx)
+
+		// 1. Check or lock idempotency key
+		record, err := idempotency.CheckOrLock(r.Context(), txQueries, merchant.ID, idempotencyKey, reqHash)
+		if err != nil {
+			return err
+		}
+
+		if record.Replayed {
+			replayed = true
+			var cached RefundResponse
+			if err := json.Unmarshal(record.ResponseBody, &cached); err == nil {
+				refundResp = &cached
+			}
+			return nil
+		}
+
+		// 2. Lock payment row to prevent concurrent over-refunds
+		payment, err := txQueries.GetPaymentByIDForUpdate(r.Context(), db.GetPaymentByIDForUpdateParams{
+			ID:         paymentID,
+			MerchantID: merchant.ID,
+		})
+		if err != nil {
+			if errors.Is(err, pgx.ErrNoRows) {
+				userStatus = http.StatusNotFound
+				userCode = "payment_not_found"
+				userErr = errors.New("payment not found")
+				return userErr
+			}
+			return fmt.Errorf("failed to lock payment: %w", err)
+		}
+
+		// 3. Status and balance validation
+		if payment.Status != "succeeded" && payment.Status != "partially_refunded" {
+			userStatus = http.StatusBadRequest
+			userCode = "invalid_payment_status"
+			userErr = fmt.Errorf("payment status '%s' cannot be refunded", payment.Status)
+			return userErr
+		}
+
+		if payment.AmountRefunded+req.Amount > payment.Amount {
+			userStatus = http.StatusBadRequest
+			userCode = "refund_exceeds_balance"
+			userErr = fmt.Errorf("refund amount %d exceeds refundable balance of %d", req.Amount, payment.Amount-payment.AmountRefunded)
+			return userErr
+		}
+
+		// 4. Create refund record
+		refundID := platform.NewID(platform.PrefixRefund)
+		refundRow, err := txQueries.CreateRefund(r.Context(), db.CreateRefundParams{
+			ID:        refundID,
+			PaymentID: payment.ID,
+			Amount:    req.Amount,
+		})
+		if err != nil {
+			return fmt.Errorf("failed to create refund record: %w", err)
+		}
+
+		// 5. Update payment refunded amount & status
+		updatedPayment, err := txQueries.UpdatePaymentRefund(r.Context(), db.UpdatePaymentRefundParams{
+			ID:           payment.ID,
+			MerchantID:   merchant.ID,
+			RefundAmount: req.Amount,
+		})
+		if err != nil {
+			return fmt.Errorf("failed to update payment refund: %w", err)
+		}
+
+		// 6. Record payment event
+		_, err = txQueries.InsertPaymentEvent(r.Context(), db.InsertPaymentEventParams{
+			PaymentID:  payment.ID,
+			FromStatus: pgtype.Text{String: payment.Status, Valid: true},
+			ToStatus:   updatedPayment.Status,
+			Reason:     pgtype.Text{String: "refund_issued", Valid: true},
+		})
+		if err != nil {
+			return fmt.Errorf("failed to record payment event: %w", err)
+		}
+
+		// 7. Post double-entry refund ledger entries
+		err = h.ledgerService.PostRefund(r.Context(), txQueries, refundRow.ID, payment.ID, merchant.ID, payment.Currency, req.Amount)
+		if err != nil {
+			return fmt.Errorf("failed to post refund ledger: %w", err)
+		}
+
+		// 8. Enqueue outbox event for webhooks
+		outboxPayload, _ := json.Marshal(map[string]any{
+			"refund_id":  refundRow.ID,
+			"payment_id": payment.ID,
+			"amount":     req.Amount,
+			"currency":   payment.Currency,
+			"status":     "succeeded",
+		})
+
+		_, err = txQueries.CreateOutboxEvent(r.Context(), db.CreateOutboxEventParams{
+			MerchantID:  merchant.ID,
+			AggregateID: refundRow.ID,
+			Type:        "refund.succeeded",
+			Payload:     outboxPayload,
+		})
+		if err != nil {
+			return fmt.Errorf("failed to enqueue refund outbox event: %w", err)
+		}
+
+		// 9. Format response and cache in idempotency store
+		refundResp = &RefundResponse{
+			ID:        refundRow.ID,
+			PaymentID: payment.ID,
+			Amount:    refundRow.Amount,
+			Currency:  payment.Currency,
+			Status:    "succeeded",
+			CreatedAt: refundRow.CreatedAt.Time.Format(time.RFC3339),
+		}
+
+		respBytes, err := json.Marshal(refundResp)
+		if err != nil {
+			return fmt.Errorf("failed to marshal refund response: %w", err)
+		}
+
+		return idempotency.SaveResponse(r.Context(), txQueries, merchant.ID, idempotencyKey, http.StatusCreated, respBytes)
+	})
+
+	if userErr != nil {
+		writeError(w, userStatus, userCode, userErr.Error())
+		return
+	}
+
+	if err != nil {
+		if errors.Is(err, idempotency.ErrKeyReusedDifferentPayload) {
+			writeError(w, http.StatusUnprocessableEntity, "idempotency_key_reused", "idempotency key was previously used with a different request payload")
+			return
+		}
+		if errors.Is(err, idempotency.ErrConcurrentRequest) {
+			writeError(w, http.StatusConflict, "concurrent_request", "a concurrent request with this idempotency key is already in progress")
+			return
+		}
+		writeError(w, http.StatusInternalServerError, "internal_error", fmt.Sprintf("failed to process refund: %v", err))
+		return
+	}
+
+	if replayed {
+		w.Header().Set("Idempotent-Replayed", "true")
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusCreated)
+	_ = json.NewEncoder(w).Encode(refundResp)
+}
+
+// ListRefunds handles GET /v1/payments/{id}/refunds.
+func (h *PaymentsHandler) ListRefunds(w http.ResponseWriter, r *http.Request) {
+	merchant, err := MerchantFromContext(r.Context())
+	if err != nil {
+		writeError(w, http.StatusUnauthorized, "unauthorized", "unauthenticated merchant")
+		return
+	}
+
+	paymentID := r.PathValue("id")
+	if paymentID == "" {
+		writeError(w, http.StatusBadRequest, "invalid_id", "payment id is required")
+		return
+	}
+
+	// Verify payment belongs to merchant
+	payment, err := h.queries.GetPaymentByID(r.Context(), db.GetPaymentByIDParams{
+		ID:         paymentID,
+		MerchantID: merchant.ID,
+	})
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			writeError(w, http.StatusNotFound, "payment_not_found", "payment does not exist")
+			return
+		}
+		writeError(w, http.StatusInternalServerError, "internal_error", "failed to retrieve payment")
+		return
+	}
+
+	refunds, err := h.queries.ListRefundsForPayment(r.Context(), paymentID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "internal_error", "failed to list refunds")
+		return
+	}
+
+	data := make([]RefundResponse, 0, len(refunds))
+	for _, rf := range refunds {
+		data = append(data, RefundResponse{
+			ID:        rf.ID,
+			PaymentID: rf.PaymentID,
+			Amount:    rf.Amount,
+			Currency:  payment.Currency,
+			Status:    "succeeded",
+			CreatedAt: rf.CreatedAt.Time.Format(time.RFC3339),
+		})
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	_ = json.NewEncoder(w).Encode(map[string]any{
+		"data": data,
+	})
 }
