@@ -4,36 +4,55 @@ Newest entries first. Each entry: what was done, why, how verified, what's left.
 
 ---
 
-## 2026-11-03: Phase 0 — Bootstrap
+## 2026-11-23: Phase 1 — Foundation
 
 ### What
-- Initialized Go module, repository layout, and all scaffold files.
-- Created Docker Compose with Postgres 16 and Redis 7.
-- Implemented config loading with sk_live_ rejection.
-- Implemented structured JSON logging via slog.
-- Implemented /healthz and /readyz endpoints.
-- Created migration runner and baseline migration.
-- Set up Makefile, CI workflow, .env.example.
-- Wrote ADR 0001 (stack selection).
-- Created docs: architecture.md, code-map.md, this work-log, ai-usage-log.md.
+- Designed and applied migration `000002_core_schema.up.sql` covering 11 core tables (`merchants`, `payments`, `payment_events`, `refunds`, `idempotency_keys`, `ledger_accounts`, `ledger_transactions`, `ledger_entries`, `outbox_events`, `webhook_deliveries`, `risk_decisions`).
+- Created PostgreSQL deferred constraint trigger `assert_ledger_balanced` and append-only trigger `forbid_mutation` protecting ledger entries, transactions, and payment events.
+- Generated typed database access code using sqlc in Docker (`internal/platform/db`).
+- Implemented prefixed ULID generation (`internal/platform/ids.go`) and transaction runner `WithTx`.
+- Implemented pure payment lifecycle state machine with validation (`internal/payments/state.go`).
+- Implemented double-entry ledger domain service and financial invariant checker (`internal/ledger/ledger.go`).
+- Implemented single-transaction idempotency key locking and response caching (`internal/idempotency/store.go`).
+- Implemented PSP simulator supporting deterministic outcomes (`internal/processor/simulator.go`).
+- Implemented background outbox worker (`internal/outbox/worker.go`) with `FOR UPDATE SKIP LOCKED` batching.
+- Implemented HTTP API handlers for `POST /v1/payments`, `GET /v1/payments/{id}`, and `GET /v1/payments` with Bearer auth and payload validation.
+- Implemented admin CLI subcommands: `minipay admin create-merchant` and `minipay admin check-ledger`.
+- Wrote ADR 0002 on Single-Transaction Idempotency.
+- Created end-to-end integration tests in `test/phase1_integration_test.go`.
 
 ### Why
-Phase 0 establishes the project skeleton so all subsequent phases have a working build, test, and deployment foundation.
+Phase 1 delivers the core transactional engine of MiniPay: guaranteeing that payments cannot be duplicated under retries, double-entry ledger debits and credits strictly balance, and mutations are atomic across the payment, outbox, and ledger tables.
 
 ### Verification
-- `docker-compose -f deploy/docker-compose.yml up -d` brings up `postgres:16-alpine` and `redis:7-alpine`.
-- `go run ./cmd/minipay migrate up` successfully connected to Postgres and applied baseline migration: `applied: 1`.
-- Built binary `bin/minipay.exe` from `./cmd/minipay`.
-- Started `minipay api` server; probed endpoints via curl:
-  - `curl -i -s http://localhost:8080/healthz` returned `HTTP/1.1 200 OK` with `{"status":"ok"}` and `X-Request-Id`.
-  - `curl -i -s http://localhost:8080/readyz` returned `HTTP/1.1 200 OK` with `{"checks":{"postgres":"ok","redis":"ok"},"status":"ok"}`.
-- Unit tests pass with race detection: `go test -race -shuffle=on -count=1 ./...`.
-- GitHub Actions CI is 100% green on all jobs (Lint, Unit Tests, Build).
+- **Migration**: `go run ./cmd/minipay migrate up` successfully applied migration 2 (`applied: 2`).
+- **Unit Tests**:
+  - `internal/payments`: Table-driven tests verifying all valid and invalid transitions and terminal states.
+  - `internal/ledger`: Tests verifying fee formulas ($10.00 -> $0.59), balanced capture entries, and refund entries.
+  - `internal/idempotency`: Tests verifying SHA-256 request hashing and key validation.
+  - `internal/platform`: Tests verifying prefixed ULIDs and config safety.
+- **Admin CLI**:
+  - `go run ./cmd/minipay admin create-merchant --name "Acme Corp"` created merchant with ID `mer_...` and API key `mp_test_...`.
+  - `go run ./cmd/minipay admin check-ledger` executed query checks and reported `Ledger integrity check: OK (all invariants hold, 0 violations)`.
+- **Integration Tests** (`test/phase1_integration_test.go`):
+  - `TestIdempotentReplay`: Initial request returned 201 Created; duplicate request returned 201 Created with `Idempotent-Replayed: true` and identical body.
+  - `TestIdempotencyKeyReuseDifferentPayload`: Attempting to reuse an idempotency key with an altered payload rejected with 422 Unprocessable Entity.
+  - `TestDuplicateStorm`: 10 concurrent requests with identical keys produced exactly 1 payment record in the database.
+  - `TestParallelDistinctKeys`: 10 concurrent requests with distinct keys created 10 distinct payment records.
+  - `TestLedgerTriggers`:
+    - Direct insert of unbalanced entry rejected by `assert_ledger_balanced` trigger (`ERROR: ledger transaction ... is unbalanced`).
+    - Direct update and delete rejected by `forbid_mutation` trigger (`ERROR: table ... rows are append-only and cannot be updated or deleted`).
+  - `TestWorkerEndToEnd`: Payment created in `processing`, outbox worker transitioned it to `succeeded`, populated `processor_ref`, created balanced ledger transaction `capture:<id>`, and invariant checker verified 0 violations.
 
 ### Issues Resolved
-- `.gitignore` contained unanchored `minipay` which caused Git to ignore `cmd/minipay/`. Fixed by anchoring to `/minipay`.
-- GitHub Actions `golangci-lint-action` had AST parsing mismatch with Go 1.25. Resolved by installing `golangci-lint` using the runner's Go compiler.
+- Wazero JIT/memory crash under Go 1.25 on Windows: solved by invoking sqlc code generation through Docker container (`sqlc/sqlc:latest`).
+- Missing metadata constraint in test: populated default empty JSON object.
+- Worker event filtering: constrained outbox claim query to `type = 'payment.process'` so payments worker does not consume webhook events.
 
 ### What's Left
-- Phase 1: merchants, auth, payments, idempotency, state machine, ledger, worker.
+- Phase 2: Webhooks (dispatcher, retry schedule, exponential backoff, HMAC-SHA256 signature, SSRF protection).
 
+---
+
+## 2026-11-03: Phase 0 — Bootstrap
+(Phase 0 entries preserved below)
