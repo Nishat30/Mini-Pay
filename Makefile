@@ -43,7 +43,7 @@ load:
 
 # Run the demo script.
 demo:
-	@echo "Demo not yet implemented. See Phase 1."
+	@powershell -ExecutionPolicy Bypass -File scripts/demo.ps1
 
 # Build the binary.
 build:

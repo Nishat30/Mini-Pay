@@ -12,6 +12,84 @@ servers:
   - url: http://localhost:8080
     description: Local development
 
+components:
+  securitySchemes:
+    BearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: mp_test_...
+
+  schemas:
+    Error:
+      type: object
+      required:
+        - error
+      properties:
+        error:
+          type: object
+          required:
+            - code
+            - message
+          properties:
+            code:
+              type: string
+            message:
+              type: string
+
+    Payment:
+      type: object
+      required:
+        - id
+        - merchant_id
+        - amount
+        - amount_refunded
+        - currency
+        - status
+        - processor
+        - metadata
+        - created_at
+        - updated_at
+      properties:
+        id:
+          type: string
+          example: pay_01HXYZ...
+        merchant_id:
+          type: string
+          example: mer_01HABC...
+        amount:
+          type: integer
+          description: Amount in minor units (e.g. 1000 = $10.00)
+          example: 1000
+        amount_refunded:
+          type: integer
+          example: 0
+        currency:
+          type: string
+          enum: [usd, eur, gbp, inr, jpy]
+          example: usd
+        status:
+          type: string
+          enum: [processing, requires_review, succeeded, failed, refunded]
+          example: processing
+        processor:
+          type: string
+          example: simulator
+        processor_ref:
+          type: string
+          nullable: true
+          example: sim_ch_1234
+        failure_code:
+          type: string
+          nullable: true
+        metadata:
+          type: object
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+
 paths:
   /healthz:
     get:
@@ -48,3 +126,110 @@ paths:
         "503":
           description: One or more dependencies are not ready
 
+  /v1/payments:
+    post:
+      summary: Create a payment
+      operationId: createPayment
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: Idempotency-Key
+          in: header
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - amount
+                - currency
+              properties:
+                amount:
+                  type: integer
+                  minimum: 50
+                  maximum: 99999999
+                currency:
+                  type: string
+                  enum: [usd, eur, gbp, inr, jpy]
+                metadata:
+                  type: object
+      responses:
+        "201":
+          description: Payment created
+          headers:
+            Idempotent-Replayed:
+              schema:
+                type: boolean
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Payment'
+        "400":
+          description: Bad request
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        "401":
+          description: Unauthorized
+        "409":
+          description: Concurrent request in progress
+        "422":
+          description: Idempotency key reused with different payload
+
+    get:
+      summary: List payments
+      operationId: listPayments
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            default: 10
+            maximum: 100
+        - name: starting_after
+          in: query
+          schema:
+            type: string
+      responses:
+        "200":
+          description: List of payments
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/Payment'
+                  has_more:
+                    type: boolean
+
+  /v1/payments/{id}:
+    get:
+      summary: Retrieve a payment
+      operationId: getPayment
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Payment details
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Payment'
+        "404":
+          description: Payment not found

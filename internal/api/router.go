@@ -13,19 +13,30 @@ import (
 
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/redis/go-redis/v9"
+
+	"github.com/minipay/minipay/internal/platform/db"
 )
 
 // NewRouter creates the HTTP handler with all routes and middleware.
-func NewRouter(logger *slog.Logger, db *pgxpool.Pool, rdb *redis.Client) http.Handler {
+func NewRouter(logger *slog.Logger, pool *pgxpool.Pool, rdb *redis.Client) http.Handler {
 	mux := http.NewServeMux()
 
 	// Health checks — no auth required.
 	mux.HandleFunc("GET /healthz", handleHealthz())
-	mux.HandleFunc("GET /readyz", handleReadyz(db, rdb))
+	mux.HandleFunc("GET /readyz", handleReadyz(pool, rdb))
 
-	// TODO(phase-1): add /v1/payments, /v1/events, /v1/merchant routes.
+	// Database queries and payments handler
+	queries := db.New(pool)
+	paymentsHandler := NewPaymentsHandler(pool, queries)
 
-	// Wrap with middleware (outermost first).
+	// Authenticated routes
+	authMiddleware := Authenticate(queries)
+
+	mux.Handle("POST /v1/payments", authMiddleware(http.HandlerFunc(paymentsHandler.CreatePayment)))
+	mux.Handle("GET /v1/payments/{id}", authMiddleware(http.HandlerFunc(paymentsHandler.GetPayment)))
+	mux.Handle("GET /v1/payments", authMiddleware(http.HandlerFunc(paymentsHandler.ListPayments)))
+
+	// Wrap with global middleware (outermost first).
 	var handler http.Handler = mux
 	handler = requestIDMiddleware(handler)
 	handler = recoverMiddleware(handler, logger)
