@@ -17,6 +17,7 @@ import (
 
 	"github.com/minipay/minipay/internal/api"
 	"github.com/minipay/minipay/internal/platform"
+	"github.com/minipay/minipay/internal/webhooks"
 )
 
 func runAPI(cfg *platform.Config, logger *slog.Logger) error {
@@ -36,7 +37,11 @@ func runAPI(cfg *platform.Config, logger *slog.Logger) error {
 		return fmt.Errorf("connect redis: %w", err)
 	}
 
-	router := api.NewRouter(logger, db, rdb)
+	policy := webhooks.SecurityPolicy{
+		AllowPrivate:  cfg.AllowPrivateWebhooks,
+		AllowInsecure: cfg.AllowInsecureWebhooks,
+	}
+	router := api.NewRouter(logger, db, rdb, policy)
 
 	srv := &http.Server{
 		Addr:         fmt.Sprintf(":%d", cfg.APIPort),
