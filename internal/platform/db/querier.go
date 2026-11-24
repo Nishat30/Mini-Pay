@@ -20,6 +20,7 @@ type Querier interface {
 	CreateMerchant(ctx context.Context, arg CreateMerchantParams) (Merchants, error)
 	CreateOutboxEvent(ctx context.Context, arg CreateOutboxEventParams) (OutboxEvents, error)
 	CreatePayment(ctx context.Context, arg CreatePaymentParams) (Payments, error)
+	CreateRefund(ctx context.Context, arg CreateRefundParams) (Refunds, error)
 	CreateWebhookDelivery(ctx context.Context, arg CreateWebhookDeliveryParams) (WebhookDeliveries, error)
 	GetAccount(ctx context.Context, arg GetAccountParams) (LedgerAccounts, error)
 	GetAccountBalance(ctx context.Context, accountID string) (int64, error)
@@ -29,18 +30,25 @@ type Querier interface {
 	GetMerchantByID(ctx context.Context, id string) (Merchants, error)
 	GetOutboxEventByID(ctx context.Context, id int64) (OutboxEvents, error)
 	GetPaymentByID(ctx context.Context, arg GetPaymentByIDParams) (Payments, error)
+	GetPaymentByIDAdmin(ctx context.Context, id string) (Payments, error)
 	GetPaymentByIDForUpdate(ctx context.Context, arg GetPaymentByIDForUpdateParams) (Payments, error)
+	GetRefundByID(ctx context.Context, id string) (Refunds, error)
 	GetWebhookDelivery(ctx context.Context, id string) (WebhookDeliveries, error)
 	GetWebhookDeliveryByEvent(ctx context.Context, arg GetWebhookDeliveryByEventParams) (WebhookDeliveries, error)
 	InsertIdempotencyKey(ctx context.Context, arg InsertIdempotencyKeyParams) (IdempotencyKeys, error)
 	InsertPaymentEvent(ctx context.Context, arg InsertPaymentEventParams) (PaymentEvents, error)
+	InsertRiskDecision(ctx context.Context, arg InsertRiskDecisionParams) (RiskDecisions, error)
 	ListPayments(ctx context.Context, arg ListPaymentsParams) ([]Payments, error)
+	ListPaymentsByStatus(ctx context.Context, status string) ([]Payments, error)
+	ListRefundsForPayment(ctx context.Context, paymentID string) ([]Refunds, error)
+	ListRiskDecisionsForPayment(ctx context.Context, paymentID string) ([]RiskDecisions, error)
 	MarkOutboxProcessed(ctx context.Context, id int64) error
 	ScheduleOutboxRetry(ctx context.Context, arg ScheduleOutboxRetryParams) error
 	UpdateDeliveryFailure(ctx context.Context, arg UpdateDeliveryFailureParams) error
 	UpdateDeliverySuccess(ctx context.Context, arg UpdateDeliverySuccessParams) error
 	UpdateIdempotencyKeyCompleted(ctx context.Context, arg UpdateIdempotencyKeyCompletedParams) error
 	UpdateMerchantWebhook(ctx context.Context, arg UpdateMerchantWebhookParams) (Merchants, error)
+	UpdatePaymentRefund(ctx context.Context, arg UpdatePaymentRefundParams) (Payments, error)
 	UpdatePaymentStatus(ctx context.Context, arg UpdatePaymentStatusParams) (Payments, error)
 }
 

@@ -33,3 +33,36 @@ RETURNING *;
 INSERT INTO payment_events (payment_id, from_status, to_status, reason, created_at)
 VALUES ($1, $2, $3, $4, now())
 RETURNING *;
+
+-- name: CreateRefund :one
+INSERT INTO refunds (id, payment_id, amount, created_at)
+VALUES ($1, $2, $3, now())
+RETURNING *;
+
+-- name: UpdatePaymentRefund :one
+UPDATE payments
+SET amount_refunded = amount_refunded + @refund_amount,
+    status = CASE WHEN amount_refunded + @refund_amount = amount THEN 'refunded' ELSE status END,
+    version = version + 1,
+    updated_at = now()
+WHERE id = @id AND merchant_id = @merchant_id
+RETURNING *;
+
+-- name: ListRefundsForPayment :many
+SELECT * FROM refunds
+WHERE payment_id = $1
+ORDER BY created_at ASC;
+
+-- name: GetRefundByID :one
+SELECT * FROM refunds
+WHERE id = $1;
+
+-- name: ListPaymentsByStatus :many
+SELECT * FROM payments
+WHERE status = $1
+ORDER BY created_at ASC;
+
+-- name: GetPaymentByIDAdmin :one
+SELECT * FROM payments
+WHERE id = $1;
+

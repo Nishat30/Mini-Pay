@@ -4,6 +4,54 @@ Newest entries first. Each entry: what was done, why, how verified, what's left.
 
 ---
 
+## 2026-11-25: Phase 4 — Production Habits & Polish
+
+### What
+- Implemented atomic token-bucket rate limiter in `internal/ratelimit/limiter.go` using Redis Lua script with automatic in-memory fallback, setting `X-RateLimit-*` headers and returning 429 Too Many Requests upon throttle.
+- Implemented multi-tier risk rules engine in `internal/risk/rules.go` (`amount_cap`, `velocity`, `risk_decisions` audit trail recording).
+- Wired risk engine into `internal/api/payments.go` (`POST /v1/payments` flags review or blocks fraud; `GET /v1/payments/{id}/risk` exposes decision audit log).
+- Built zero-dependency Prometheus exposition collector in `internal/metrics/metrics.go` exposing `/metrics` with latency histograms, request counters, payment counts, and ledger violation gauge.
+- Built administrative CLI operations in `cmd/minipay/admin.go` (`list-reviews`, `review-payment` approval flow, `inspect-risk`, and authenticated web `dashboard`).
+- Wrote integration test suite `test/phase4_integration_test.go` verifying rate limiting throttling, risk amount cap / review / block flow, admin review processing, and Prometheus metric scrapes.
+- Recorded ADR 0005 for Rate Limiting, Risk Rules Engine, and Observability.
+
+### Why
+Phase 4 hardens MiniPay for real-world production multi-tenancy: guarding infrastructure against denial-of-service, intercepting fraudulent / excessive charges before PSP processing, exposing operational metrics, and giving operators tools to manage exceptions.
+
+### Verification
+- **Unit Tests**:
+  - `internal/ratelimit`: verified token burst capacity, elapsed refill calculation, HTTP headers, and 429 response.
+  - `internal/risk`: verified allow, review, and block outcomes for amount thresholds, velocity window counting, and aggregate decision composition.
+  - `internal/metrics`: verified counter, gauge, and histogram exposition syntax matching Prometheus 0.0.4 text format.
+- **Integration Tests** (`test/phase4_integration_test.go`):
+  - `TestRateLimitingHeadersAndThrottling`: verified rate limit headers and 429 throttling under burst traffic.
+  - `TestRiskEngineAmountCapAndReviews`: verified full review lifecycle (charge creation in `requires_review`, rejection of automated worker charging, admin approval transition to `processing`, and final worker settlement to `succeeded`).
+  - `TestPrometheusMetricsScrape`: verified `GET /metrics` HTTP 200, Content-Type, and presence of all core metrics.
+
+### What's Left
+- All core phases (0, 1, 2, 3, 4) complete and verified!
+
+---
+
+## 2026-11-24: Phase 3 — Refunds & Stripe Adapter
+
+### What
+- Implemented refund state machine and endpoints (`POST /v1/payments/{id}/refunds` and `GET /v1/payments/{id}/refunds`) in `internal/api/payments.go`.
+- Added PostgreSQL `FOR UPDATE` row lock and database check constraint `CHECK (amount_refunded BETWEEN 0 AND amount)` preventing over-refunding.
+- Implemented double-entry ledger refund accounting in `internal/ledger/ledger.go` (`PostRefund`: Debit Merchant Payable, Credit Processor Clearing) satisfying `assert_ledger_balanced` and `forbid_mutation` triggers.
+- Implemented `processor.Processor` abstraction and `processor.StripeAdapter` with live-key safety rejection and testmode REST client.
+- Wrote ADR 0004 for Refund Accounting and Concurrency Control.
+- Created integration race test in `test/phase3_integration_test.go`.
+
+### Why
+Phase 3 enables partial and full reversals while guaranteeing ledger balancing, auditability, and zero possibility of concurrent race over-refunds.
+
+### Verification
+- `TestPartialAndFullRefund`: Verified partial refund ($40) keeps payment succeeded, subsequent refund ($60) transitions to `refunded`, and ledger remains balanced with 0 violations.
+- `TestConcurrentRefundRaceCondition`: 10 parallel $2 refund requests against a $10 payment resulted in exactly 5 successes ($10 total refunded) and 5 rejections with 0 over-refund.
+
+---
+
 ## 2026-11-23: Phase 2 — Webhooks
 
 ### What
