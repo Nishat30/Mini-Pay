@@ -11,6 +11,9 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"time"
+
+	"github.com/minipay/minipay/internal/metrics"
 )
 
 type contextKey string
@@ -61,4 +64,26 @@ func generateRequestID() string {
 	b := make([]byte, 16)
 	_, _ = rand.Read(b)
 	return "req_" + hex.EncodeToString(b)
+}
+
+type statusRecorder struct {
+	http.ResponseWriter
+	statusCode int
+}
+
+func (rec *statusRecorder) WriteHeader(code int) {
+	rec.statusCode = code
+	rec.ResponseWriter.WriteHeader(code)
+}
+
+func metricsMiddleware(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		start := time.Now()
+		rec := &statusRecorder{ResponseWriter: w, statusCode: http.StatusOK}
+		next.ServeHTTP(rec, r)
+		duration := time.Since(start)
+
+		path := r.URL.Path
+		metrics.RecordHTTPRequest(r.Method, path, rec.statusCode, duration)
+	})
 }

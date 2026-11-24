@@ -14,7 +14,9 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/redis/go-redis/v9"
 
+	"github.com/minipay/minipay/internal/metrics"
 	"github.com/minipay/minipay/internal/platform/db"
+	"github.com/minipay/minipay/internal/ratelimit"
 	"github.com/minipay/minipay/internal/webhooks"
 )
 
@@ -27,30 +29,41 @@ func NewRouter(logger *slog.Logger, pool *pgxpool.Pool, rdb *redis.Client, polic
 		policy = policies[0]
 	}
 
-	// Health checks — no auth required.
+	// Health & Metrics checks — no auth required.
+	metrics.SetLedgerViolations(0)
 	mux.HandleFunc("GET /healthz", handleHealthz())
 	mux.HandleFunc("GET /readyz", handleReadyz(pool, rdb))
+	mux.HandleFunc("GET /metrics", metrics.DefaultRegistry.Handler())
 
 	// Database queries and handlers
 	queries := db.New(pool)
 	paymentsHandler := NewPaymentsHandler(pool, queries)
 	merchantsHandler := NewMerchantsHandler(queries, policy)
 
-	// Authenticated routes
-	authMiddleware := Authenticate(queries)
+	// Rate limiter (Redis with in-memory fallback)
+	limiter := ratelimit.NewRedisLimiter(rdb)
+	rateLimitMiddleware := ratelimit.Middleware(limiter, 100, 10)
 
-	mux.Handle("POST /v1/payments", authMiddleware(http.HandlerFunc(paymentsHandler.CreatePayment)))
-	mux.Handle("GET /v1/payments/{id}", authMiddleware(http.HandlerFunc(paymentsHandler.GetPayment)))
-	mux.Handle("GET /v1/payments", authMiddleware(http.HandlerFunc(paymentsHandler.ListPayments)))
-	mux.Handle("POST /v1/payments/{id}/refunds", authMiddleware(http.HandlerFunc(paymentsHandler.CreateRefund)))
-	mux.Handle("GET /v1/payments/{id}/refunds", authMiddleware(http.HandlerFunc(paymentsHandler.ListRefunds)))
+	// Authenticated routes wrapped with rate limiting
+	authMiddleware := Authenticate(queries)
+	apiChain := func(h http.Handler) http.Handler {
+		return authMiddleware(rateLimitMiddleware(h))
+	}
+
+	mux.Handle("POST /v1/payments", apiChain(http.HandlerFunc(paymentsHandler.CreatePayment)))
+	mux.Handle("GET /v1/payments/{id}", apiChain(http.HandlerFunc(paymentsHandler.GetPayment)))
+	mux.Handle("GET /v1/payments", apiChain(http.HandlerFunc(paymentsHandler.ListPayments)))
+	mux.Handle("POST /v1/payments/{id}/refunds", apiChain(http.HandlerFunc(paymentsHandler.CreateRefund)))
+	mux.Handle("GET /v1/payments/{id}/refunds", apiChain(http.HandlerFunc(paymentsHandler.ListRefunds)))
+	mux.Handle("GET /v1/payments/{id}/risk", apiChain(http.HandlerFunc(paymentsHandler.GetPaymentRisk)))
 
 	// Webhook configuration routes
-	mux.Handle("PUT /v1/merchants/webhook", authMiddleware(http.HandlerFunc(merchantsHandler.UpdateWebhook)))
-	mux.Handle("GET /v1/merchants/webhook", authMiddleware(http.HandlerFunc(merchantsHandler.GetWebhook)))
+	mux.Handle("PUT /v1/merchants/webhook", apiChain(http.HandlerFunc(merchantsHandler.UpdateWebhook)))
+	mux.Handle("GET /v1/merchants/webhook", apiChain(http.HandlerFunc(merchantsHandler.GetWebhook)))
 
 	// Wrap with global middleware (outermost first).
 	var handler http.Handler = mux
+	handler = metricsMiddleware(handler)
 	handler = requestIDMiddleware(handler)
 	handler = recoverMiddleware(handler, logger)
 

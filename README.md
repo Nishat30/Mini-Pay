@@ -72,10 +72,32 @@ make build            # Build binary to bin/
 ## Project Status
 
 - [x] Phase 0: Bootstrap — project scaffold, health checks, CI
-- [ ] Phase 1: Foundation — payments, idempotency, ledger, worker
-- [ ] Phase 2: Reliability — refunds, webhooks, rate limiting, risk
-- [ ] Phase 3: Hardening — load tests, fault injection, migration drill
-- [ ] Phase 4: Stripe and Polish — Stripe adapter, admin page, dashboard
+- [x] Phase 1: Foundation — payments, single-transaction idempotency, double-entry ledger, outbox worker
+- [x] Phase 2: Webhooks — SSRF defense (RFC 1918, link-local, cloud metadata), HMAC-SHA256 signatures, retry dispatcher
+- [x] Phase 3: Refunds & Stripe Adapter — concurrency protection (`FOR UPDATE` + DB check constraint), ledger reversals, Stripe testmode adapter
+- [x] Phase 4: Production Habits & Polish — token-bucket rate limiting (Redis + in-memory fallback), multi-tier risk engine (`amount_cap`, `velocity`), Prometheus metrics (`/metrics`), admin CLI review workflow & dashboard
+
+## Admin Operations
+
+```bash
+# Check ledger invariants across all accounts
+go run ./cmd/minipay admin check-ledger
+
+# Create a new merchant
+go run ./cmd/minipay admin create-merchant -name "Acme Corp"
+
+# List payments awaiting risk review
+go run ./cmd/minipay admin list-reviews
+
+# Approve or decline a payment under review
+go run ./cmd/minipay admin review-payment -id pay_01M... -action approve
+
+# Inspect risk rule evaluation decisions
+go run ./cmd/minipay admin inspect-risk -id pay_01M...
+
+# Launch the administrative web dashboard (:8081)
+go run ./cmd/minipay admin dashboard -port 8081
+```
 
 ## Documentation
 

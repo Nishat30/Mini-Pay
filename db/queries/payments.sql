@@ -56,3 +56,13 @@ ORDER BY created_at ASC;
 -- name: GetRefundByID :one
 SELECT * FROM refunds
 WHERE id = $1;
+
+-- name: ListPaymentsByStatus :many
+SELECT * FROM payments
+WHERE status = $1
+ORDER BY created_at ASC;
+
+-- name: GetPaymentByIDAdmin :one
+SELECT * FROM payments
+WHERE id = $1;
+

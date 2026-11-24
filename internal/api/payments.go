@@ -16,8 +16,10 @@ import (
 
 	"github.com/minipay/minipay/internal/idempotency"
 	"github.com/minipay/minipay/internal/ledger"
+	"github.com/minipay/minipay/internal/metrics"
 	"github.com/minipay/minipay/internal/platform"
 	"github.com/minipay/minipay/internal/platform/db"
+	"github.com/minipay/minipay/internal/risk"
 )
 
 // SupportedCurrencies lists standard currencies for MiniPay.
@@ -57,14 +59,25 @@ type PaymentsHandler struct {
 	pool          *pgxpool.Pool
 	queries       *db.Queries
 	ledgerService *ledger.Service
+	riskEngine    *risk.Engine
 }
 
 // NewPaymentsHandler creates a new PaymentsHandler.
-func NewPaymentsHandler(pool *pgxpool.Pool, queries *db.Queries) *PaymentsHandler {
+func NewPaymentsHandler(pool *pgxpool.Pool, queries *db.Queries, riskEngines ...*risk.Engine) *PaymentsHandler {
+	var re *risk.Engine
+	if len(riskEngines) > 0 && riskEngines[0] != nil {
+		re = riskEngines[0]
+	} else {
+		re = risk.NewEngine(
+			risk.NewAmountCapRule(50000, 500000), // $500 review, $5000 block
+			risk.NewVelocityRule(20, 1*time.Minute),
+		)
+	}
 	return &PaymentsHandler{
 		pool:          pool,
 		queries:       queries,
 		ledgerService: ledger.NewService(queries),
+		riskEngine:    re,
 	}
 }
 
@@ -168,16 +181,57 @@ func (h *PaymentsHandler) CreatePayment(w http.ResponseWriter, r *http.Request) 
 		// 2. Generate Payment ID
 		paymentID := platform.NewID(platform.PrefixPayment)
 
-		// 3. Insert Payment in 'processing' status
+		// 2.5 Evaluate Risk
+		initialStatus := "processing"
+		failureCode := pgtype.Text{Valid: false}
+		reason := "payment_created"
+		shouldProcess := true
+
+		if h.riskEngine != nil {
+			riskCtx := risk.Context{
+				MerchantID: merchant.ID,
+				PaymentID:  paymentID,
+				Amount:     req.Amount,
+				Currency:   currency,
+				Metadata:   req.Metadata,
+			}
+			aggDecision, decisions, err := h.riskEngine.Evaluate(r.Context(), riskCtx)
+			if err != nil {
+				return fmt.Errorf("risk evaluation failed: %w", err)
+			}
+
+			// Record decisions in risk_decisions table
+			defer func() {
+				_ = risk.RecordDecisions(r.Context(), txQueries, paymentID, decisions)
+			}()
+
+			switch aggDecision.Outcome {
+			case risk.OutcomeBlock:
+				initialStatus = "failed"
+				failureCode = pgtype.Text{String: "risk_blocked", Valid: true}
+				reason = "risk_blocked"
+				shouldProcess = false
+			case risk.OutcomeReview:
+				initialStatus = "requires_review"
+				reason = "risk_review"
+				shouldProcess = false
+			case risk.OutcomeAllow:
+				initialStatus = "processing"
+				reason = "payment_created"
+				shouldProcess = true
+			}
+		}
+
+		// 3. Insert Payment
 		paymentRow, err := txQueries.CreatePayment(r.Context(), db.CreatePaymentParams{
 			ID:           paymentID,
 			MerchantID:   merchant.ID,
 			Amount:       req.Amount,
 			Currency:     currency,
-			Status:       "processing",
+			Status:       initialStatus,
 			Processor:    "simulator",
 			ProcessorRef: pgtype.Text{Valid: false},
-			FailureCode:  pgtype.Text{Valid: false},
+			FailureCode:  failureCode,
 			Metadata:     metadataJSON,
 		})
 		if err != nil {
@@ -188,35 +242,40 @@ func (h *PaymentsHandler) CreatePayment(w http.ResponseWriter, r *http.Request) 
 		_, err = txQueries.InsertPaymentEvent(r.Context(), db.InsertPaymentEventParams{
 			PaymentID:  paymentRow.ID,
 			FromStatus: pgtype.Text{Valid: false},
-			ToStatus:   "processing",
-			Reason:     pgtype.Text{String: "payment_created", Valid: true},
+			ToStatus:   initialStatus,
+			Reason:     pgtype.Text{String: reason, Valid: true},
 		})
 		if err != nil {
 			return fmt.Errorf("failed to record payment event: %w", err)
 		}
 
-		// 5. Create outbox event for async processing
-		simulateOpt := ""
-		if sim, ok := req.Metadata["simulate"].(string); ok {
-			simulateOpt = sim
+		// 5. Create outbox event for async processing if allowed
+		if shouldProcess {
+			simulateOpt := ""
+			if sim, ok := req.Metadata["simulate"].(string); ok {
+				simulateOpt = sim
+			}
+
+			outboxPayload, _ := json.Marshal(map[string]any{
+				"payment_id": paymentRow.ID,
+				"amount":     paymentRow.Amount,
+				"currency":   paymentRow.Currency,
+				"simulate":   simulateOpt,
+			})
+
+			_, err = txQueries.CreateOutboxEvent(r.Context(), db.CreateOutboxEventParams{
+				MerchantID:  merchant.ID,
+				AggregateID: paymentRow.ID,
+				Type:        "payment.process",
+				Payload:     outboxPayload,
+			})
+			if err != nil {
+				return fmt.Errorf("failed to create outbox event: %w", err)
+			}
 		}
 
-		outboxPayload, _ := json.Marshal(map[string]any{
-			"payment_id": paymentRow.ID,
-			"amount":     paymentRow.Amount,
-			"currency":   paymentRow.Currency,
-			"simulate":   simulateOpt,
-		})
-
-		_, err = txQueries.CreateOutboxEvent(r.Context(), db.CreateOutboxEventParams{
-			MerchantID:  merchant.ID,
-			AggregateID: paymentRow.ID,
-			Type:        "payment.process",
-			Payload:     outboxPayload,
-		})
-		if err != nil {
-			return fmt.Errorf("failed to create outbox event: %w", err)
-		}
+		// Record payment metric
+		metrics.RecordPayment(initialStatus, currency)
 
 		// 6. Build response
 		paymentResp = formatPaymentResponse(paymentRow)
@@ -619,6 +678,68 @@ func (h *PaymentsHandler) ListRefunds(w http.ResponseWriter, r *http.Request) {
 			Currency:  payment.Currency,
 			Status:    "succeeded",
 			CreatedAt: rf.CreatedAt.Time.Format(time.RFC3339),
+		})
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	_ = json.NewEncoder(w).Encode(map[string]any{
+		"data": data,
+	})
+}
+
+// GetPaymentRisk handles GET /v1/payments/{id}/risk.
+func (h *PaymentsHandler) GetPaymentRisk(w http.ResponseWriter, r *http.Request) {
+	merchant, err := MerchantFromContext(r.Context())
+	if err != nil {
+		writeError(w, http.StatusUnauthorized, "unauthorized", "unauthenticated merchant")
+		return
+	}
+
+	paymentID := r.PathValue("id")
+	if paymentID == "" {
+		writeError(w, http.StatusBadRequest, "invalid_id", "payment id is required")
+		return
+	}
+
+	// Verify payment belongs to merchant
+	_, err = h.queries.GetPaymentByID(r.Context(), db.GetPaymentByIDParams{
+		ID:         paymentID,
+		MerchantID: merchant.ID,
+	})
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			writeError(w, http.StatusNotFound, "payment_not_found", "payment does not exist")
+			return
+		}
+		writeError(w, http.StatusInternalServerError, "internal_error", "failed to retrieve payment")
+		return
+	}
+
+	decisions, err := h.queries.ListRiskDecisionsForPayment(r.Context(), paymentID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "internal_error", "failed to retrieve risk decisions")
+		return
+	}
+
+	type DecisionResponse struct {
+		ID        int64          `json:"id"`
+		Rule      string         `json:"rule"`
+		Outcome   string         `json:"outcome"`
+		Detail    map[string]any `json:"detail"`
+		CreatedAt string         `json:"created_at"`
+	}
+
+	data := make([]DecisionResponse, 0, len(decisions))
+	for _, d := range decisions {
+		var detail map[string]any
+		_ = json.Unmarshal(d.Detail, &detail)
+		data = append(data, DecisionResponse{
+			ID:        d.ID,
+			Rule:      d.Rule,
+			Outcome:   d.Outcome,
+			Detail:    detail,
+			CreatedAt: d.CreatedAt.Time.Format(time.RFC3339),
 		})
 	}
 

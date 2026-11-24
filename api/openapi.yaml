@@ -314,6 +314,56 @@ paths:
                     items:
                       type: object
 
+  /v1/payments/{id}/risk:
+    get:
+      summary: List risk decisions for a payment
+      operationId: getPaymentRisk
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Risk decisions for the payment
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        id:
+                          type: integer
+                        rule:
+                          type: string
+                        outcome:
+                          type: string
+                        detail:
+                          type: object
+                        created_at:
+                          type: string
+        "404":
+          description: Payment not found
+
+  /metrics:
+    get:
+      summary: Prometheus exposition metrics
+      operationId: getMetrics
+      responses:
+        "200":
+          description: Plaintext Prometheus metrics
+          content:
+            text/plain:
+              schema:
+                type: string
+
   /v1/merchants/webhook:
     get:
       summary: Retrieve current webhook configuration

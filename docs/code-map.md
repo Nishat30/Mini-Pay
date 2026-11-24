@@ -66,6 +66,29 @@ Updated in the same commit that adds, moves, or removes a file.
 | Path | Purpose | Depended On By |
 |------|---------|---------------|
 | `simulator.go` | PSP interface and deterministic simulator (success, decline, network_error) | Worker, tests |
+| `stripe.go` | Stripe testmode adapter (`sk_test_`), live-key rejection (`sk_live_`) | Worker, tests |
+| `stripe_test.go` | Unit tests for Stripe adapter charge and live-key safety rejection | CI |
+
+## internal/ratelimit/
+
+| Path | Purpose | Depended On By |
+|------|---------|---------------|
+| `limiter.go` | Token-bucket limiter (Redis Lua script + in-memory fallback), headers & 429 | API router |
+| `limiter_test.go` | Unit tests for burst capacity, refill rate, and 429 throttling | CI |
+
+## internal/risk/
+
+| Path | Purpose | Depended On By |
+|------|---------|---------------|
+| `rules.go` | Pluggable risk rules (`amount_cap`, `velocity`), decision recording | API payments |
+| `rules_test.go` | Unit tests for amount thresholds, velocity window counts, aggregate decisions | CI |
+
+## internal/metrics/
+
+| Path | Purpose | Depended On By |
+|------|---------|---------------|
+| `metrics.go` | Zero-dependency Prometheus exposition format collector and HTTP handler | API router |
+| `metrics_test.go` | Unit tests for counters, gauges, histograms, and /metrics handler | CI |
 
 ## internal/outbox/
 
@@ -138,6 +161,8 @@ Updated in the same commit that adds, moves, or removes a file.
 | `adr/0001-stack-and-why.md` | Technology stack selection rationale | Architecture decisions |
 | `adr/0002-single-transaction-idempotency.md` | Single-transaction idempotency and response caching | Architecture decisions |
 | `adr/0003-webhook-reliability.md` | Webhook reliability, HMAC signatures, and SSRF prevention | Architecture decisions |
+| `adr/0004-refund-accounting-and-concurrency.md` | Refund accounting, concurrency control, and processor abstraction | Architecture decisions |
+| `adr/0005-rate-limiting-and-risk-architecture.md` | Rate limiting, risk rules engine, and operational observability | Architecture decisions |
 
 ## test/
 
@@ -145,3 +170,5 @@ Updated in the same commit that adds, moves, or removes a file.
 |------|---------|---------------|
 | `phase1_integration_test.go` | Phase 1 integration tests: idempotent replay, storm, ledger triggers, worker | CI |
 | `phase2_integration_test.go` | Phase 2 integration tests: delivery success, retry backoff, dead letter, SSRF | CI |
+| `phase3_integration_test.go` | Phase 3 integration tests: partial/full refund, concurrent refund race | CI |
+| `phase4_integration_test.go` | Phase 4 integration tests: rate limiting 429, risk reviews/blocks, metrics scrape | CI |

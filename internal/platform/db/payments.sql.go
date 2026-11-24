@@ -115,6 +115,32 @@ func (q *Queries) GetPaymentByID(ctx context.Context, arg GetPaymentByIDParams) 
 	return i, err
 }
 
+const getPaymentByIDAdmin = `-- name: GetPaymentByIDAdmin :one
+SELECT id, merchant_id, amount, amount_refunded, currency, status, processor, processor_ref, failure_code, metadata, version, created_at, updated_at FROM payments
+WHERE id = $1
+`
+
+func (q *Queries) GetPaymentByIDAdmin(ctx context.Context, id string) (Payments, error) {
+	row := q.db.QueryRow(ctx, getPaymentByIDAdmin, id)
+	var i Payments
+	err := row.Scan(
+		&i.ID,
+		&i.MerchantID,
+		&i.Amount,
+		&i.AmountRefunded,
+		&i.Currency,
+		&i.Status,
+		&i.Processor,
+		&i.ProcessorRef,
+		&i.FailureCode,
+		&i.Metadata,
+		&i.Version,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
+	return i, err
+}
+
 const getPaymentByIDForUpdate = `-- name: GetPaymentByIDForUpdate :one
 SELECT id, merchant_id, amount, amount_refunded, currency, status, processor, processor_ref, failure_code, metadata, version, created_at, updated_at FROM payments
 WHERE id = $1 AND merchant_id = $2
@@ -212,6 +238,46 @@ type ListPaymentsParams struct {
 
 func (q *Queries) ListPayments(ctx context.Context, arg ListPaymentsParams) ([]Payments, error) {
 	rows, err := q.db.Query(ctx, listPayments, arg.MerchantID, arg.Limit, arg.StartingAfterID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []Payments
+	for rows.Next() {
+		var i Payments
+		if err := rows.Scan(
+			&i.ID,
+			&i.MerchantID,
+			&i.Amount,
+			&i.AmountRefunded,
+			&i.Currency,
+			&i.Status,
+			&i.Processor,
+			&i.ProcessorRef,
+			&i.FailureCode,
+			&i.Metadata,
+			&i.Version,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listPaymentsByStatus = `-- name: ListPaymentsByStatus :many
+SELECT id, merchant_id, amount, amount_refunded, currency, status, processor, processor_ref, failure_code, metadata, version, created_at, updated_at FROM payments
+WHERE status = $1
+ORDER BY created_at ASC
+`
+
+func (q *Queries) ListPaymentsByStatus(ctx context.Context, status string) ([]Payments, error) {
+	rows, err := q.db.Query(ctx, listPaymentsByStatus, status)
 	if err != nil {
 		return nil, err
 	}

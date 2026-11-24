@@ -30,6 +30,7 @@ type Querier interface {
 	GetMerchantByID(ctx context.Context, id string) (Merchants, error)
 	GetOutboxEventByID(ctx context.Context, id int64) (OutboxEvents, error)
 	GetPaymentByID(ctx context.Context, arg GetPaymentByIDParams) (Payments, error)
+	GetPaymentByIDAdmin(ctx context.Context, id string) (Payments, error)
 	GetPaymentByIDForUpdate(ctx context.Context, arg GetPaymentByIDForUpdateParams) (Payments, error)
 	GetRefundByID(ctx context.Context, id string) (Refunds, error)
 	GetWebhookDelivery(ctx context.Context, id string) (WebhookDeliveries, error)
@@ -38,6 +39,7 @@ type Querier interface {
 	InsertPaymentEvent(ctx context.Context, arg InsertPaymentEventParams) (PaymentEvents, error)
 	InsertRiskDecision(ctx context.Context, arg InsertRiskDecisionParams) (RiskDecisions, error)
 	ListPayments(ctx context.Context, arg ListPaymentsParams) ([]Payments, error)
+	ListPaymentsByStatus(ctx context.Context, status string) ([]Payments, error)
 	ListRefundsForPayment(ctx context.Context, paymentID string) ([]Refunds, error)
 	ListRiskDecisionsForPayment(ctx context.Context, paymentID string) ([]RiskDecisions, error)
 	MarkOutboxProcessed(ctx context.Context, id int64) error
