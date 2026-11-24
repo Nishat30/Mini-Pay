@@ -126,6 +126,8 @@ Updated in the same commit that adds, moves, or removes a file.
 | `000001_init.down.sql` | Rolls back baseline schema | migrate command |
 | `000002_core_schema.up.sql` | 11 core tables, ledger balance & immutability triggers | migrate command |
 | `000002_core_schema.down.sql` | Drops triggers and 11 core tables | migrate command |
+| `000003_idempotency_stats.up.sql` | Adds endpoint, replay_count, conflict_count, last_replayed_at to idempotency_keys | migrate command |
+| `000003_idempotency_stats.down.sql` | Reverts idempotency_keys stats columns | migrate command |
 
 ## db/queries/
 
@@ -172,3 +174,4 @@ Updated in the same commit that adds, moves, or removes a file.
 | `phase2_integration_test.go` | Phase 2 integration tests: delivery success, retry backoff, dead letter, SSRF | CI |
 | `phase3_integration_test.go` | Phase 3 integration tests: partial/full refund, concurrent refund race | CI |
 | `phase4_integration_test.go` | Phase 4 integration tests: rate limiting 429, risk reviews/blocks, metrics scrape | CI |
+| `idempotency_admin_integration_test.go` | Integration test for 20x concurrent retry storm, conflict rejection, and dashboard metrics | CI |

@@ -31,6 +31,7 @@ func NewRouter(logger *slog.Logger, pool *pgxpool.Pool, rdb *redis.Client, polic
 
 	// Health & Metrics checks — no auth required.
 	metrics.SetLedgerViolations(0)
+	metrics.InitIdempotencyMetrics()
 	mux.HandleFunc("GET /healthz", handleHealthz())
 	mux.HandleFunc("GET /readyz", handleReadyz(pool, rdb))
 	mux.HandleFunc("GET /metrics", metrics.DefaultRegistry.Handler())

@@ -164,7 +164,7 @@ func (h *PaymentsHandler) CreatePayment(w http.ResponseWriter, r *http.Request) 
 		txQueries := h.queries.WithTx(tx)
 
 		// 1. Check or lock idempotency key
-		record, err := idempotency.CheckOrLock(r.Context(), txQueries, merchant.ID, idempotencyKey, requestHash)
+		record, err := idempotency.CheckOrLock(r.Context(), txQueries, merchant.ID, idempotencyKey, requestHash, "POST /v1/payments")
 		if err != nil {
 			return err
 		}
@@ -291,6 +291,10 @@ func (h *PaymentsHandler) CreatePayment(w http.ResponseWriter, r *http.Request) 
 
 	if err != nil {
 		if errors.Is(err, idempotency.ErrKeyReusedDifferentPayload) {
+			_ = h.queries.IncrementIdempotencyConflict(r.Context(), db.IncrementIdempotencyConflictParams{
+				MerchantID: merchant.ID,
+				Key:        idempotencyKey,
+			})
 			writeError(w, http.StatusUnprocessableEntity, "idempotency_key_reused", "idempotency key was previously used with a different request payload")
 			return
 		}
@@ -490,7 +494,7 @@ func (h *PaymentsHandler) CreateRefund(w http.ResponseWriter, r *http.Request) {
 		txQueries := h.queries.WithTx(tx)
 
 		// 1. Check or lock idempotency key
-		record, err := idempotency.CheckOrLock(r.Context(), txQueries, merchant.ID, idempotencyKey, reqHash)
+		record, err := idempotency.CheckOrLock(r.Context(), txQueries, merchant.ID, idempotencyKey, reqHash, "POST /v1/payments/:id/refunds")
 		if err != nil {
 			return err
 		}
@@ -616,6 +620,10 @@ func (h *PaymentsHandler) CreateRefund(w http.ResponseWriter, r *http.Request) {
 
 	if err != nil {
 		if errors.Is(err, idempotency.ErrKeyReusedDifferentPayload) {
+			_ = h.queries.IncrementIdempotencyConflict(r.Context(), db.IncrementIdempotencyConflictParams{
+				MerchantID: merchant.ID,
+				Key:        idempotencyKey,
+			})
 			writeError(w, http.StatusUnprocessableEntity, "idempotency_key_reused", "idempotency key was previously used with a different request payload")
 			return
 		}

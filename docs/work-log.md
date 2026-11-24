@@ -4,6 +4,28 @@ Newest entries first. Each entry: what was done, why, how verified, what's left.
 
 ---
 
+## 2026-11-25: Idempotency Visibility & Retry Storm Simulator
+
+### What
+- Added database migration `000003_idempotency_stats.up.sql` adding `endpoint`, `replay_count`, `last_replayed_at`, `conflict_count` columns to `idempotency_keys` with an index on `created_at`.
+- Instrumented `internal/idempotency/store.go` to atomically increment `replay_count` and `last_replayed_at` on cache replays, increment `conflict_count` on payload mismatches, and re-check completed state during concurrent race completions.
+- Exposed Prometheus counters `idempotency_replays_total` and `idempotency_conflicts_total` on `GET /metrics`.
+- Added sqlc queries for `ListRecentIdempotencyKeys`, `GetIdempotencyStats`, `CheckDuplicatePayments`, `ListRecentPaymentsAdmin`, and `ListRecentWebhookDeliveries`.
+- Completely revamped admin dashboard (`minipay admin dashboard -port 8081`):
+  - Summary cards: Total keys, Total replays served, Conflicts blocked, In-flight keys, Ledger integrity status.
+  - Live data guarantee card: "N retries -> 0 duplicate payments" computed live from payment records.
+  - Recent Idempotency Keys table with key truncation, endpoint, state badge, replay count, conflict count, and timestamps.
+  - Interactive "Simulate 20x Concurrent Retry Storm" and "Simulate Payload Conflict" simulator refusing live Stripe keys and proving exactly 1 payment + 19 replays.
+  - Webhook deliveries and recent payments tables.
+- Added comprehensive unit and integration tests in `test/idempotency_admin_integration_test.go` and `internal/idempotency/store_test.go`.
+
+### Verification
+- `TestIdempotencyRetryStormAndDashboard`: 20 concurrent requests with identical idempotency key produced exactly 1 payment created, exactly 19 replays served, all with identical payment IDs, exactly 0 duplicate payments, and 0 ledger invariant violations.
+- `golangci-lint run --timeout=5m ./...`: 0 lint issues.
+- `go test -v ./...`: 100% test suite passed.
+
+---
+
 ## 2026-11-25: Phase 4 — Production Habits & Polish
 
 ### What

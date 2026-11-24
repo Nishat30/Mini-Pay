@@ -270,11 +270,29 @@ func (r *Registry) Handler() http.HandlerFunc {
 
 // Convenience application metrics
 const (
-	MetricHTTPRequestsTotal   = "http_requests_total"
-	MetricHTTPRequestDuration = "http_request_duration_seconds"
-	MetricPaymentsTotal       = "payments_total"
-	MetricLedgerViolations    = "ledger_invariants_violations"
+	MetricHTTPRequestsTotal    = "http_requests_total"
+	MetricHTTPRequestDuration  = "http_request_duration_seconds"
+	MetricPaymentsTotal        = "payments_total"
+	MetricLedgerViolations     = "ledger_invariants_violations"
+	MetricIdempotencyReplays   = "idempotency_replays_total"
+	MetricIdempotencyConflicts = "idempotency_conflicts_total"
 )
+
+// RecordIdempotencyReplay increments the idempotency replays counter.
+func RecordIdempotencyReplay() {
+	DefaultRegistry.CounterInc(MetricIdempotencyReplays, "Total count of idempotent responses replayed.", nil)
+}
+
+// RecordIdempotencyConflict increments the idempotency conflicts counter.
+func RecordIdempotencyConflict() {
+	DefaultRegistry.CounterInc(MetricIdempotencyConflicts, "Total count of idempotency key conflict rejections.", nil)
+}
+
+// InitIdempotencyMetrics initializes the counters to 0.
+func InitIdempotencyMetrics() {
+	DefaultRegistry.CounterAdd(MetricIdempotencyReplays, "Total count of idempotent responses replayed.", nil, 0)
+	DefaultRegistry.CounterAdd(MetricIdempotencyConflicts, "Total count of idempotency key conflict rejections.", nil, 0)
+}
 
 // RecordHTTPRequest records an incoming HTTP request.
 func RecordHTTPRequest(method, path string, status int, duration time.Duration) {

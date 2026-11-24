@@ -67,3 +67,4 @@ Implemented in `internal/metrics/metrics.go`:
 - **Fraud & High-Value Isolation**: Flagged payments cannot trigger charges until explicit admin approval.
 - **Zero External Dependencies for Metrics**: Self-contained Prometheus exposition eliminates brittle network library pulls while providing standard metric scraping compatibility.
 - **Complete Audit Trail**: Every decision is permanently stored in PostgreSQL and retrievable via CLI or API.
+

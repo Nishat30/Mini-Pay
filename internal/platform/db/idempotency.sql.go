@@ -7,10 +7,40 @@ package db
 
 import (
 	"context"
+
+	"github.com/jackc/pgx/v5/pgtype"
 )
 
+const checkDuplicatePayments = `-- name: CheckDuplicatePayments :one
+SELECT
+    COALESCE(SUM(replay_count), 0)::bigint AS total_retries,
+    (
+        SELECT COUNT(*)
+        FROM (
+            SELECT response_body->>'id' AS pay_id
+            FROM idempotency_keys
+            WHERE state = 'completed' AND response_body ? 'id'
+            GROUP BY response_body->>'id'
+            HAVING count(*) > 1
+        ) d
+    )::bigint AS duplicate_payments
+FROM idempotency_keys
+`
+
+type CheckDuplicatePaymentsRow struct {
+	TotalRetries      int64 `json:"total_retries"`
+	DuplicatePayments int64 `json:"duplicate_payments"`
+}
+
+func (q *Queries) CheckDuplicatePayments(ctx context.Context) (CheckDuplicatePaymentsRow, error) {
+	row := q.db.QueryRow(ctx, checkDuplicatePayments)
+	var i CheckDuplicatePaymentsRow
+	err := row.Scan(&i.TotalRetries, &i.DuplicatePayments)
+	return i, err
+}
+
 const getIdempotencyKey = `-- name: GetIdempotencyKey :one
-SELECT merchant_id, key, request_hash, state, response_status, response_body, locked_at, created_at, expires_at FROM idempotency_keys
+SELECT merchant_id, key, request_hash, state, response_status, response_body, locked_at, created_at, expires_at, endpoint, replay_count, last_replayed_at, conflict_count FROM idempotency_keys
 WHERE merchant_id = $1 AND key = $2
 `
 
@@ -32,30 +62,102 @@ func (q *Queries) GetIdempotencyKey(ctx context.Context, arg GetIdempotencyKeyPa
 		&i.LockedAt,
 		&i.CreatedAt,
 		&i.ExpiresAt,
+		&i.Endpoint,
+		&i.ReplayCount,
+		&i.LastReplayedAt,
+		&i.ConflictCount,
 	)
 	return i, err
 }
 
+const getIdempotencyStats = `-- name: GetIdempotencyStats :one
+SELECT
+    COUNT(*)::bigint AS total_keys,
+    COALESCE(SUM(replay_count), 0)::bigint AS total_replays,
+    COALESCE(SUM(conflict_count), 0)::bigint AS total_conflicts,
+    COUNT(*) FILTER (WHERE state = 'started' AND locked_at IS NOT NULL AND locked_at > now() - interval '60 seconds')::bigint AS in_flight_count
+FROM idempotency_keys
+`
+
+type GetIdempotencyStatsRow struct {
+	TotalKeys      int64 `json:"total_keys"`
+	TotalReplays   int64 `json:"total_replays"`
+	TotalConflicts int64 `json:"total_conflicts"`
+	InFlightCount  int64 `json:"in_flight_count"`
+}
+
+func (q *Queries) GetIdempotencyStats(ctx context.Context) (GetIdempotencyStatsRow, error) {
+	row := q.db.QueryRow(ctx, getIdempotencyStats)
+	var i GetIdempotencyStatsRow
+	err := row.Scan(
+		&i.TotalKeys,
+		&i.TotalReplays,
+		&i.TotalConflicts,
+		&i.InFlightCount,
+	)
+	return i, err
+}
+
+const incrementIdempotencyConflict = `-- name: IncrementIdempotencyConflict :exec
+UPDATE idempotency_keys
+SET conflict_count = conflict_count + 1
+WHERE merchant_id = $1 AND key = $2
+`
+
+type IncrementIdempotencyConflictParams struct {
+	MerchantID string `json:"merchant_id"`
+	Key        string `json:"key"`
+}
+
+func (q *Queries) IncrementIdempotencyConflict(ctx context.Context, arg IncrementIdempotencyConflictParams) error {
+	_, err := q.db.Exec(ctx, incrementIdempotencyConflict, arg.MerchantID, arg.Key)
+	return err
+}
+
+const incrementIdempotencyReplay = `-- name: IncrementIdempotencyReplay :exec
+UPDATE idempotency_keys
+SET replay_count = replay_count + 1,
+    last_replayed_at = now()
+WHERE merchant_id = $1 AND key = $2
+`
+
+type IncrementIdempotencyReplayParams struct {
+	MerchantID string `json:"merchant_id"`
+	Key        string `json:"key"`
+}
+
+func (q *Queries) IncrementIdempotencyReplay(ctx context.Context, arg IncrementIdempotencyReplayParams) error {
+	_, err := q.db.Exec(ctx, incrementIdempotencyReplay, arg.MerchantID, arg.Key)
+	return err
+}
+
 const insertIdempotencyKey = `-- name: InsertIdempotencyKey :one
-INSERT INTO idempotency_keys (merchant_id, key, request_hash, state, response_status, response_body, locked_at, created_at, expires_at)
-VALUES ($1, $2, $3, 'started', 0, '{}'::jsonb, now(), now(), now() + interval '24 hours')
+INSERT INTO idempotency_keys (merchant_id, key, request_hash, endpoint, state, response_status, response_body, locked_at, created_at, expires_at)
+VALUES ($1, $2, $3, COALESCE($4::text, '/v1/payments'), 'started', 0, '{}'::jsonb, now(), now(), now() + interval '24 hours')
 ON CONFLICT (merchant_id, key) DO UPDATE
 SET request_hash = EXCLUDED.request_hash,
+    endpoint = EXCLUDED.endpoint,
     state = 'started',
     locked_at = now(),
     expires_at = now() + interval '24 hours'
 WHERE idempotency_keys.expires_at < now()
-RETURNING merchant_id, key, request_hash, state, response_status, response_body, locked_at, created_at, expires_at
+RETURNING merchant_id, key, request_hash, state, response_status, response_body, locked_at, created_at, expires_at, endpoint, replay_count, last_replayed_at, conflict_count
 `
 
 type InsertIdempotencyKeyParams struct {
-	MerchantID  string `json:"merchant_id"`
-	Key         string `json:"key"`
-	RequestHash []byte `json:"request_hash"`
+	MerchantID  string      `json:"merchant_id"`
+	Key         string      `json:"key"`
+	RequestHash []byte      `json:"request_hash"`
+	Endpoint    pgtype.Text `json:"endpoint"`
 }
 
 func (q *Queries) InsertIdempotencyKey(ctx context.Context, arg InsertIdempotencyKeyParams) (IdempotencyKeys, error) {
-	row := q.db.QueryRow(ctx, insertIdempotencyKey, arg.MerchantID, arg.Key, arg.RequestHash)
+	row := q.db.QueryRow(ctx, insertIdempotencyKey,
+		arg.MerchantID,
+		arg.Key,
+		arg.RequestHash,
+		arg.Endpoint,
+	)
 	var i IdempotencyKeys
 	err := row.Scan(
 		&i.MerchantID,
@@ -67,8 +169,61 @@ func (q *Queries) InsertIdempotencyKey(ctx context.Context, arg InsertIdempotenc
 		&i.LockedAt,
 		&i.CreatedAt,
 		&i.ExpiresAt,
+		&i.Endpoint,
+		&i.ReplayCount,
+		&i.LastReplayedAt,
+		&i.ConflictCount,
 	)
 	return i, err
+}
+
+const listRecentIdempotencyKeys = `-- name: ListRecentIdempotencyKeys :many
+SELECT merchant_id, key, endpoint, state, replay_count, conflict_count, last_replayed_at, created_at, expires_at
+FROM idempotency_keys
+ORDER BY created_at DESC
+LIMIT $1
+`
+
+type ListRecentIdempotencyKeysRow struct {
+	MerchantID     string             `json:"merchant_id"`
+	Key            string             `json:"key"`
+	Endpoint       string             `json:"endpoint"`
+	State          string             `json:"state"`
+	ReplayCount    int32              `json:"replay_count"`
+	ConflictCount  int32              `json:"conflict_count"`
+	LastReplayedAt pgtype.Timestamptz `json:"last_replayed_at"`
+	CreatedAt      pgtype.Timestamptz `json:"created_at"`
+	ExpiresAt      pgtype.Timestamptz `json:"expires_at"`
+}
+
+func (q *Queries) ListRecentIdempotencyKeys(ctx context.Context, limit int32) ([]ListRecentIdempotencyKeysRow, error) {
+	rows, err := q.db.Query(ctx, listRecentIdempotencyKeys, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListRecentIdempotencyKeysRow
+	for rows.Next() {
+		var i ListRecentIdempotencyKeysRow
+		if err := rows.Scan(
+			&i.MerchantID,
+			&i.Key,
+			&i.Endpoint,
+			&i.State,
+			&i.ReplayCount,
+			&i.ConflictCount,
+			&i.LastReplayedAt,
+			&i.CreatedAt,
+			&i.ExpiresAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
 }
 
 const updateIdempotencyKeyCompleted = `-- name: UpdateIdempotencyKeyCompleted :exec

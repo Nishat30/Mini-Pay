@@ -133,6 +133,42 @@ func (q *Queries) GetWebhookDeliveryByEvent(ctx context.Context, arg GetWebhookD
 	return i, err
 }
 
+const listRecentWebhookDeliveries = `-- name: ListRecentWebhookDeliveries :many
+SELECT id, merchant_id, event_id, state, attempts, next_attempt_at, last_status, last_error, created_at FROM webhook_deliveries
+ORDER BY created_at DESC
+LIMIT $1
+`
+
+func (q *Queries) ListRecentWebhookDeliveries(ctx context.Context, limit int32) ([]WebhookDeliveries, error) {
+	rows, err := q.db.Query(ctx, listRecentWebhookDeliveries, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []WebhookDeliveries
+	for rows.Next() {
+		var i WebhookDeliveries
+		if err := rows.Scan(
+			&i.ID,
+			&i.MerchantID,
+			&i.EventID,
+			&i.State,
+			&i.Attempts,
+			&i.NextAttemptAt,
+			&i.LastStatus,
+			&i.LastError,
+			&i.CreatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const updateDeliveryFailure = `-- name: UpdateDeliveryFailure :exec
 UPDATE webhook_deliveries
 SET state = $2,

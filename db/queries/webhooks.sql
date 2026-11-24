@@ -38,3 +38,9 @@ SET state = $2,
     last_status = $4,
     last_error = $5
 WHERE id = $1;
+
+-- name: ListRecentWebhookDeliveries :many
+SELECT * FROM webhook_deliveries
+ORDER BY created_at DESC
+LIMIT $1;
+

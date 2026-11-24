@@ -10,7 +10,9 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgtype"
 
+	"github.com/minipay/minipay/internal/metrics"
 	"github.com/minipay/minipay/internal/platform/db"
 )
 
@@ -48,11 +50,12 @@ func ValidateKey(key string) error {
 }
 
 // CheckOrLock inspects the idempotency key within a transaction.
-// If the key has already completed successfully with the same hash, it returns the cached response (Replayed: true).
-// If the key was used with a different hash, it returns ErrKeyReusedDifferentPayload.
+// If the key has already completed successfully with the same hash, it returns the cached response (Replayed: true)
+// and atomically increments the replay counter.
+// If the key was used with a different hash, it returns ErrKeyReusedDifferentPayload and records a conflict.
 // If the key is currently locked by a live in-flight request, it returns ErrConcurrentRequest.
 // Otherwise, it locks the key for processing in this transaction.
-func CheckOrLock(ctx context.Context, txQueries *db.Queries, merchantID, key string, requestHash []byte) (*Record, error) {
+func CheckOrLock(ctx context.Context, txQueries *db.Queries, merchantID, key string, requestHash []byte, endpoint ...string) (*Record, error) {
 	existing, err := txQueries.GetIdempotencyKey(ctx, db.GetIdempotencyKeyParams{
 		MerchantID: merchantID,
 		Key:        key,
@@ -66,10 +69,20 @@ func CheckOrLock(ctx context.Context, txQueries *db.Queries, merchantID, key str
 		} else {
 			// Check if payload matches
 			if !bytes.Equal(existing.RequestHash, requestHash) {
+				_ = txQueries.IncrementIdempotencyConflict(ctx, db.IncrementIdempotencyConflictParams{
+					MerchantID: merchantID,
+					Key:        key,
+				})
+				metrics.RecordIdempotencyConflict()
 				return nil, ErrKeyReusedDifferentPayload
 			}
 
 			if existing.State == "completed" {
+				_ = txQueries.IncrementIdempotencyReplay(ctx, db.IncrementIdempotencyReplayParams{
+					MerchantID: merchantID,
+					Key:        key,
+				})
+				metrics.RecordIdempotencyReplay()
 				return &Record{
 					Replayed:       true,
 					ResponseStatus: int(existing.ResponseStatus),
@@ -89,13 +102,49 @@ func CheckOrLock(ctx context.Context, txQueries *db.Queries, merchantID, key str
 		return nil, fmt.Errorf("failed to query idempotency key: %w", err)
 	}
 
+	epText := pgtype.Text{Valid: false}
+	if len(endpoint) > 0 && endpoint[0] != "" {
+		epText = pgtype.Text{String: endpoint[0], Valid: true}
+	}
+
 	// Insert or refresh key in 'started' state
 	_, err = txQueries.InsertIdempotencyKey(ctx, db.InsertIdempotencyKeyParams{
 		MerchantID:  merchantID,
 		Key:         key,
 		RequestHash: requestHash,
+		Endpoint:    epText,
 	})
 	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			// A concurrent transaction completed immediately before us. Re-check state.
+			rechecked, recheckErr := txQueries.GetIdempotencyKey(ctx, db.GetIdempotencyKeyParams{
+				MerchantID: merchantID,
+				Key:        key,
+			})
+			if recheckErr == nil {
+				if !bytes.Equal(rechecked.RequestHash, requestHash) {
+					_ = txQueries.IncrementIdempotencyConflict(ctx, db.IncrementIdempotencyConflictParams{
+						MerchantID: merchantID,
+						Key:        key,
+					})
+					metrics.RecordIdempotencyConflict()
+					return nil, ErrKeyReusedDifferentPayload
+				}
+				if rechecked.State == "completed" {
+					_ = txQueries.IncrementIdempotencyReplay(ctx, db.IncrementIdempotencyReplayParams{
+						MerchantID: merchantID,
+						Key:        key,
+					})
+					metrics.RecordIdempotencyReplay()
+					return &Record{
+						Replayed:       true,
+						ResponseStatus: int(rechecked.ResponseStatus),
+						ResponseBody:   rechecked.ResponseBody,
+					}, nil
+				}
+			}
+			return nil, ErrConcurrentRequest
+		}
 		return nil, fmt.Errorf("failed to insert idempotency key: %w", err)
 	}
 

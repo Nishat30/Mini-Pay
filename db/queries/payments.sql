@@ -66,3 +66,9 @@ ORDER BY created_at ASC;
 SELECT * FROM payments
 WHERE id = $1;
 
+-- name: ListRecentPaymentsAdmin :many
+SELECT * FROM payments
+ORDER BY created_at DESC
+LIMIT $1;
+
+

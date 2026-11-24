@@ -10,6 +10,7 @@ import (
 
 type Querier interface {
 	CheckCurrencyMismatchEntries(ctx context.Context) ([]CheckCurrencyMismatchEntriesRow, error)
+	CheckDuplicatePayments(ctx context.Context) (CheckDuplicatePaymentsRow, error)
 	CheckUnbalancedTransactions(ctx context.Context) ([]CheckUnbalancedTransactionsRow, error)
 	ClaimOutboxEvents(ctx context.Context, arg ClaimOutboxEventsParams) ([]OutboxEvents, error)
 	ClaimOutboxEventsForWebhooks(ctx context.Context, limit int32) ([]OutboxEvents, error)
@@ -25,6 +26,7 @@ type Querier interface {
 	GetAccount(ctx context.Context, arg GetAccountParams) (LedgerAccounts, error)
 	GetAccountBalance(ctx context.Context, accountID string) (int64, error)
 	GetIdempotencyKey(ctx context.Context, arg GetIdempotencyKeyParams) (IdempotencyKeys, error)
+	GetIdempotencyStats(ctx context.Context) (GetIdempotencyStatsRow, error)
 	GetLedgerTransactionByRef(ctx context.Context, reference string) (LedgerTransactions, error)
 	GetMerchantByAPIKeyHash(ctx context.Context, apiKeyHash []byte) (Merchants, error)
 	GetMerchantByID(ctx context.Context, id string) (Merchants, error)
@@ -35,11 +37,16 @@ type Querier interface {
 	GetRefundByID(ctx context.Context, id string) (Refunds, error)
 	GetWebhookDelivery(ctx context.Context, id string) (WebhookDeliveries, error)
 	GetWebhookDeliveryByEvent(ctx context.Context, arg GetWebhookDeliveryByEventParams) (WebhookDeliveries, error)
+	IncrementIdempotencyConflict(ctx context.Context, arg IncrementIdempotencyConflictParams) error
+	IncrementIdempotencyReplay(ctx context.Context, arg IncrementIdempotencyReplayParams) error
 	InsertIdempotencyKey(ctx context.Context, arg InsertIdempotencyKeyParams) (IdempotencyKeys, error)
 	InsertPaymentEvent(ctx context.Context, arg InsertPaymentEventParams) (PaymentEvents, error)
 	InsertRiskDecision(ctx context.Context, arg InsertRiskDecisionParams) (RiskDecisions, error)
 	ListPayments(ctx context.Context, arg ListPaymentsParams) ([]Payments, error)
 	ListPaymentsByStatus(ctx context.Context, status string) ([]Payments, error)
+	ListRecentIdempotencyKeys(ctx context.Context, limit int32) ([]ListRecentIdempotencyKeysRow, error)
+	ListRecentPaymentsAdmin(ctx context.Context, limit int32) ([]Payments, error)
+	ListRecentWebhookDeliveries(ctx context.Context, limit int32) ([]WebhookDeliveries, error)
 	ListRefundsForPayment(ctx context.Context, paymentID string) ([]Refunds, error)
 	ListRiskDecisionsForPayment(ctx context.Context, paymentID string) ([]RiskDecisions, error)
 	MarkOutboxProcessed(ctx context.Context, id int64) error

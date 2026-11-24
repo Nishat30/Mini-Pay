@@ -310,6 +310,46 @@ func (q *Queries) ListPaymentsByStatus(ctx context.Context, status string) ([]Pa
 	return items, nil
 }
 
+const listRecentPaymentsAdmin = `-- name: ListRecentPaymentsAdmin :many
+SELECT id, merchant_id, amount, amount_refunded, currency, status, processor, processor_ref, failure_code, metadata, version, created_at, updated_at FROM payments
+ORDER BY created_at DESC
+LIMIT $1
+`
+
+func (q *Queries) ListRecentPaymentsAdmin(ctx context.Context, limit int32) ([]Payments, error) {
+	rows, err := q.db.Query(ctx, listRecentPaymentsAdmin, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []Payments
+	for rows.Next() {
+		var i Payments
+		if err := rows.Scan(
+			&i.ID,
+			&i.MerchantID,
+			&i.Amount,
+			&i.AmountRefunded,
+			&i.Currency,
+			&i.Status,
+			&i.Processor,
+			&i.ProcessorRef,
+			&i.FailureCode,
+			&i.Metadata,
+			&i.Version,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listRefundsForPayment = `-- name: ListRefundsForPayment :many
 SELECT id, payment_id, amount, created_at FROM refunds
 WHERE payment_id = $1

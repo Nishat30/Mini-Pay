@@ -18,6 +18,10 @@ type IdempotencyKeys struct {
 	LockedAt       pgtype.Timestamptz `json:"locked_at"`
 	CreatedAt      pgtype.Timestamptz `json:"created_at"`
 	ExpiresAt      pgtype.Timestamptz `json:"expires_at"`
+	Endpoint       string             `json:"endpoint"`
+	ReplayCount    int32              `json:"replay_count"`
+	LastReplayedAt pgtype.Timestamptz `json:"last_replayed_at"`
+	ConflictCount  int32              `json:"conflict_count"`
 }
 
 type LedgerAccounts struct {
